@@ -108,23 +108,29 @@ Base URL: `https://api.weather.gov/` — no API key needed.
 ### Troubleshooting
 
 ```bash
-# Test tool directly
+# Test tool directly (use model_tools, not direct registry access)
 cd ~/.hermes/hermes-agent && python3 -c "
 import sys; sys.path.insert(0, '.')
-import tools.nws_weather_tool
-from tools.registry import registry
-entry = registry.get_entry('nws_now')
-print(entry.handler({}, task_id='test'))
+from model_tools import handle_function_call
+import json
+result = handle_function_call('nws_now', {}, None)
+parsed = json.loads(result)
+print('weather:', parsed.get('weather'))
+print('temperature:', parsed.get('temperature'))
 "
 
-# Verify cron toolset includes nws_weather
+# Test all four tools
 cd ~/.hermes/hermes-agent && python3 -c "
-from hermes_cli.tools_config import _get_platform_tools
-from hermes_cli.config import load_config
-cfg = load_config()
-tools = _get_platform_tools(cfg, 'cron')
-print('nws_weather in cron tools:', 'nws_weather' in tools)
+import sys; sys.path.insert(0, '.')
+from model_tools import handle_function_call
+import json
+for tool in ['nws_now', 'nws_hourly', 'nws_forecast', 'nws_alerts']:
+    r = json.loads(handle_function_call(tool, {}, None))
+    print(tool + ':', 'OK' if 'error' not in r else 'ERROR: ' + r['error'])
 "
+
+# Verify nws_weather is in platform_toolsets.cron
+grep -A20 'platform_toolsets:' ~/.hermes/config.yaml | grep nws_weather
 ```
 
 ### Best Practice Notes (v0.11.0)
@@ -136,9 +142,11 @@ The tool file follows the official [Adding Tools](https://hermes-agent.nousresea
 - ✅ Schema with `name`, `description`, `parameters`
 - ✅ Toolset defined in `TOOLSETS`, tools in `_HERMES_CORE_TOOLS`
 - ✅ Handler signature `(args: dict, **kwargs)`
-- ⚠️ `check_fn` omitted — not needed (no external dependencies/API keys)
+- ✅ `check_fn` omitted — not needed (no external dependencies/API keys)
+- ✅ Synchronous handlers (uses `urllib.request`); `is_async` not needed
+- ✅ `nws_weather` in `platform_toolsets.cron` → accessible to cron scheduler
 
-**Known v0.11.0 issue:** The cron scheduler resolves toolsets via `_get_platform_tools(cfg, "cron")` which reads `platform_toolsets.cron` from `config.yaml`. If `nws_weather` is not in that list, cron jobs silently skip weather tool calls. This is independent of the tool file and `toolsets.py` registration.
+**v0.11.0 cron toolset requirement:** The cron scheduler resolves toolsets via `_get_platform_tools(cfg, "cron")` which reads `platform_toolsets.cron` from `config.yaml`. If `nws_weather` is not in that list, cron jobs silently skip weather tool calls. This is independent of the tool file and `toolsets.py` registration.
 
 ---
 
