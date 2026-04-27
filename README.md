@@ -2,6 +2,106 @@
 
 Custom tool integrations for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
+> **Hermes update note:** Tool files in `custom_tools/` are the source of truth. `~/.hermes/hermes-agent/tools/` symlinks to them. The `toolsets.py` changes below must be re-applied after each Hermes update.
+
+---
+
+## GitHub Scouter Tool
+
+**Location:** `custom_tools/github_scouter/`
+
+Fetches top 15 GitHub projects created in the last 20 days (sorted by stars), records them to a Notion database, and returns the list.
+
+### Tools Provided
+
+| Tool | Description |
+|------|-------------|
+| `github_scouter` | Fetch trending repos, write to Notion, return structured list |
+
+### Environment Variables
+
+| Variable | Required | Source |
+|----------|----------|--------|
+| `NOTION_TOKEN` or `NOTION_API_KEY` | Yes | Notion integration token |
+| `GITHUB_TOKEN` | No | Falls back to `gh auth token` if unset |
+
+### Notion Database IDs (hardcoded)
+
+- `DATABASE_ID = "2f855a34-9949-8020-83b5-cc37c2f54df5"` (knowledge center)
+- `DATA_SOURCE_ID = "2f855a34-9949-806b-888c-000bf8c77d79"`
+
+### Installation
+
+#### Step 1 — Create symlink
+
+```bash
+ln -s /path/to/hermes-custom-tools/custom_tools/github_scouter/github_scouter.py \
+      ~/.hermes/hermes-agent/tools/github_scouter.py
+```
+
+#### Step 2 — Patch `toolsets.py`
+
+Edit `~/.hermes/hermes-agent/toolsets.py`:
+
+**A) Add to `_HERMES_CORE_TOOLS`** (around line 60, after `ha_call_service`):
+```python
+    # GitHub Trending scouter
+    "github_scouter",
+```
+
+**B) Add `github_scouter` toolset definition** (after `nws_weather` definition):
+```python
+    "github_scouter": {
+        "description": "GitHub Trending scouter — fetch top projects from the last 20 days, record to Notion",
+        "tools": ["github_scouter"],
+        "includes": []
+    },
+```
+
+#### Step 3 — Add to `platform_toolsets.cron`
+
+Edit `~/.hermes/config.yaml`, add `github_scouter` to the `platform_toolsets.cron` list:
+
+```yaml
+platform_toolsets:
+  cron:
+    - browser
+    - clarify
+    - code_execution
+    - cronjob
+    - delegation
+    - file
+    - image_gen
+    - memory
+    - messaging
+    - session_search
+    - skills
+    - terminal
+    - todo
+    - tts
+    - vision
+    - web
+    - nws_weather
+    - github_scouter          # ← add this
+```
+
+#### Step 4 — Verify
+
+```bash
+cd ~/.hermes/hermes-agent && python3 -c "
+import sys; sys.path.insert(0, '.')
+from model_tools import handle_function_call
+import json
+result = handle_function_call('github_scouter', {}, None)
+parsed = json.loads(result)
+print('total:', parsed.get('total'), '| new:', parsed.get('new'), '| updated:', parsed.get('updated'))
+"
+```
+
+Expected output: `total: 15 | new: N | updated: M`
+
+---
+
 ## NWS Weather Tool
 
 **Location:** `custom_tools/nws_weather_tool/`
@@ -23,11 +123,11 @@ Weather data for **Trenton, NJ** using the public National Weather Service API �
 
 ### Installation
 
-#### Step 1 — Copy the tool file
+#### Step 1 — Create symlink
 
 ```bash
-cp custom_tools/nws_weather_tool/nws_weather_tool.py \
-   ~/.hermes/hermes-agent/tools/nws_weather_tool.py
+ln -s /path/to/hermes-custom-tools/custom_tools/nws_weather_tool/nws_weather_tool.py \
+      ~/.hermes/hermes-agent/tools/nws_weather_tool.py
 ```
 
 #### Step 2 — Patch `toolsets.py`
@@ -40,7 +140,7 @@ Edit `~/.hermes/hermes-agent/toolsets.py`:
     "nws_now", "nws_hourly", "nws_forecast", "nws_alerts",
 ```
 
-**B) Add `nws_weather` toolset definition** (after `homeassistant` definition, around line 200):
+**B) Add `nws_weather` toolset definition** (after `homeassistant` definition):
 ```python
     "nws_weather": {
         "description": "NWS weather for Trenton NJ — current conditions, hourly, 7-day forecast, and alerts",
@@ -49,32 +149,17 @@ Edit `~/.hermes/hermes-agent/toolsets.py`:
     },
 ```
 
-#### Step 3 — Enable for cron jobs (required for v0.11.0+)
+#### Step 3 — Add to `platform_toolsets.cron`
 
-**Important:** Since Hermes Agent v0.11.0, cron jobs use a separate toolset configuration via `platform_toolsets.cron` in `config.yaml`. Without this, the scheduler cannot see custom tools even if they are registered in `toolsets.py`.
-
-Add `nws_weather` to the `platform_toolsets.cron` list in `~/.hermes/config.yaml`:
+Edit `~/.hermes/config.yaml`, add `nws_weather` to the `platform_toolsets.cron` list (if not already present):
 
 ```yaml
 platform_toolsets:
   cron:
-    - browser
-    - clarify
-    - code_execution
-    - cronjob
-    - delegation
-    - file
-    - image_gen
-    - memory
-    - messaging
-    - session_search
-    - skills
-    - terminal
-    - todo
-    - tts
-    - vision
+    - ...
     - web
-    - nws_weather          # ← add this
+    - nws_weather          # ← add this if missing
+    - github_scouter
 ```
 
 #### Step 4 — Verify
@@ -108,18 +193,7 @@ Base URL: `https://api.weather.gov/` — no API key needed.
 ### Troubleshooting
 
 ```bash
-# Test tool directly (use model_tools, not direct registry access)
-cd ~/.hermes/hermes-agent && python3 -c "
-import sys; sys.path.insert(0, '.')
-from model_tools import handle_function_call
-import json
-result = handle_function_call('nws_now', {}, None)
-parsed = json.loads(result)
-print('weather:', parsed.get('weather'))
-print('temperature:', parsed.get('temperature'))
-"
-
-# Test all four tools
+# Test all four NWS tools
 cd ~/.hermes/hermes-agent && python3 -c "
 import sys; sys.path.insert(0, '.')
 from model_tools import handle_function_call
@@ -129,24 +203,9 @@ for tool in ['nws_now', 'nws_hourly', 'nws_forecast', 'nws_alerts']:
     print(tool + ':', 'OK' if 'error' not in r else 'ERROR: ' + r['error'])
 "
 
-# Verify nws_weather is in platform_toolsets.cron
-grep -A20 'platform_toolsets:' ~/.hermes/config.yaml | grep nws_weather
+# Verify toolsets in platform_toolsets.cron
+grep -A20 'platform_toolsets:' ~/.hermes/config.yaml | grep -E 'nws_weather|github_scouter'
 ```
-
-### Best Practice Notes (v0.11.0)
-
-The tool file follows the official [Adding Tools](https://hermes-agent.nousresearch.com/docs/developer-guide/adding-tools) guide:
-
-- ✅ `registry.register()` with top-level call → auto-discovered
-- ✅ Handler returns `json.dumps({...})`, errors as `{"error": "..."}`
-- ✅ Schema with `name`, `description`, `parameters`
-- ✅ Toolset defined in `TOOLSETS`, tools in `_HERMES_CORE_TOOLS`
-- ✅ Handler signature `(args: dict, **kwargs)`
-- ✅ `check_fn` omitted — not needed (no external dependencies/API keys)
-- ✅ Synchronous handlers (uses `urllib.request`); `is_async` not needed
-- ✅ `nws_weather` in `platform_toolsets.cron` → accessible to cron scheduler
-
-**v0.11.0 cron toolset requirement:** The cron scheduler resolves toolsets via `_get_platform_tools(cfg, "cron")` which reads `platform_toolsets.cron` from `config.yaml`. If `nws_weather` is not in that list, cron jobs silently skip weather tool calls. This is independent of the tool file and `toolsets.py` registration.
 
 ---
 
@@ -206,17 +265,21 @@ If `registry.register(toolset="my_toolset", ...)` is used but `"my_toolset"` is 
 
 ### Hermes update gotcha
 
-When Hermes updates, `~/.hermes/hermes-agent/tools/` **persists** (your custom tool files survive), but `toolsets.py` may be overwritten. Re-apply the `toolsets.py` changes after each Hermes update.
+When Hermes updates:
+- `~/.hermes/hermes-agent/tools/` **persists** (your symlinked tool files survive)
+- `toolsets.py` **may be overwritten** → re-apply the `toolsets.py` patch
+- `~/.hermes/config.yaml` **persists** (platform_toolsets.cron survives)
 
 ---
 
 ## Cron Jobs Using These Tools
 
-| Job | Schedule | Tools Used |
-|-----|----------|------------|
-| Daily Morning Weather | 08:00 daily | `nws_now`, `nws_forecast`, `nws_alerts` |
-| Severe Weather Alert | 07:00 & 15:00 daily | `nws_alerts`, `nws_forecast` |
+| Job | Schedule | Tools Used | enabled_toolsets |
+|-----|----------|------------|-----------------|
+| Daily Morning Weather | 08:00 daily | `nws_now`, `nws_forecast`, `nws_alerts` | `["nws_weather", "web"]` |
+| Severe Weather Alert | 07:00 & 15:00 daily | `nws_alerts`, `nws_forecast` | `["nws_weather", "web"]` |
+| GitHub Trending Scouter | 08:00 daily | `github_scouter` | `["github_scouter", "web"]` |
 
-These jobs use `enabled_toolsets` / `platform_toolsets.cron` configuration. They do **not** use the Hermes skills system — they call NWS tools directly by name.
+These jobs use `enabled_toolsets` configuration. They do **not** use the Hermes skills system — they call tools directly by name.
 
-**Cron jobs require `platform_toolsets.cron` to include `nws_weather`** (Step 3 above). Without it, weather tool calls are silently skipped in v0.11.0+.
+**Cron jobs require both `toolsets.py` registration AND `platform_toolsets.cron` inclusion** (Step 3 in each tool's installation above). Without the latter, cron jobs silently skip tool calls in v0.11.0+.
