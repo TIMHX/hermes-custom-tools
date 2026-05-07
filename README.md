@@ -190,6 +190,23 @@ Expected output: `weather: <condition>, temperature: <temp>`
 
 Base URL: `https://api.weather.gov/` — no API key needed.
 
+### Severe Weather Watchdog Script
+
+**Location:** `custom_tools/nws_weather_tool/severe-weather-watchdog.py`
+
+A standalone Python script for `no_agent` cron mode. Checks NWS alerts and forecast for severe conditions; outputs a warning message only when severe weather is detected. Silent otherwise (watchdog pattern).
+
+**Installation:**
+
+```bash
+# Replace the stock ~/.hermes/scripts/ copy with a symlink to the repo
+rm -f ~/.hermes/scripts/severe-weather-watchdog.py
+ln -s /path/to/hermes-custom-tools/custom_tools/nws_weather_tool/severe-weather-watchdog.py \
+      ~/.hermes/scripts/severe-weather-watchdog.py
+```
+
+**Thresholds:** precipitation probability > 40%, severe keywords (thunderstorm, tornado, etc.), temp ≤ 25°F or ≥ 100°F.
+
 ### Troubleshooting
 
 ```bash
@@ -205,6 +222,39 @@ for tool in ['nws_now', 'nws_hourly', 'nws_forecast', 'nws_alerts']:
 
 # Verify toolsets in platform_toolsets.cron
 grep -A20 'platform_toolsets:' ~/.hermes/config.yaml | grep -E 'nws_weather|github_scouter'
+```
+
+---
+
+## OpenViking Plugin Patches
+
+The OpenViking memory provider (`plugins/memory/openviking/__init__.py`) is patched with two enhancements:
+
+| Enhancement | Description |
+|-------------|-------------|
+| `viking_add_resource` | Support local file paths via temp_upload (instead of URL-only) |
+| `viking_delete` | Delete files/directories from OpenViking via `DELETE /api/v1/fs` |
+
+Both are bundled in a single combined patch: `hermes-patches/openviking-combined.diff`
+
+### Re-applying
+
+After `hermes update`, run:
+
+```bash
+bash ~/hermes-custom-tools/hermes-patches/apply-patches.sh && hermes gateway restart
+```
+
+The apply script patches the plugin file and toolsets.py, verifies syntax, then instructs you to restart.
+
+### Verify
+
+```bash
+cd ~/.hermes/hermes-agent && python3 -c "
+import sys; sys.path.insert(0, '.')
+from plugins.memory.openviking import OpenVikingMemoryProvider
+print('OK: plugin imports cleanly')
+"
 ```
 
 ---
@@ -267,8 +317,11 @@ If `registry.register(toolset="my_toolset", ...)` is used but `"my_toolset"` is 
 
 When Hermes updates:
 - `~/.hermes/hermes-agent/tools/` **persists** (your symlinked tool files survive)
-- `toolsets.py` **may be overwritten** → re-apply the `toolsets.py` patch
+- `toolsets.py` **may be overwritten** → re-apply via `apply-patches.sh`
+- `plugins/memory/openviking/__init__.py` **will be overwritten** → re-apply via `apply-patches.sh`
 - `~/.hermes/config.yaml` **persists** (platform_toolsets.cron survives)
+
+Full re-apply command: `bash ~/hermes-custom-tools/hermes-patches/apply-patches.sh && hermes gateway restart`
 
 ---
 
