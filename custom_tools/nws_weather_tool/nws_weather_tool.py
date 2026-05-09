@@ -1,10 +1,12 @@
-"""NWS (National Weather Service) weather tools for Trenton, NJ.
+"""NWS (National Weather Service) weather tools.
 
 Uses the public NWS API at https://api.weather.gov/ — no API key required.
 
-Home address: [REDACTED]
-Coordinates: 0.0, 0.0
-Grid point: PHI / 62, 92
+Configuration via environment variables:
+  NWS_HOME_LAT  — home latitude  (e.g. 40.7128)
+  NWS_HOME_LON  — home longitude (e.g. -74.0060)
+
+If not set, the tools raise a clear error so the user knows what to configure.
 
 Registers four LLM-callable tools:
 - ``nws_now``       -- current conditions (temp, humidity, wind, etc.)
@@ -24,22 +26,34 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ------------------------------------------------------------------
 
-_USER_AGENT = "Hermes-NWS-Tool/1.0 (Trenton NJ Weather)"
+_USER_AGENT = "Hermes-NWS-Tool/1.0"
 _NWS_BASE = "https://api.weather.gov"
 
 # Cached grid point — refreshed once per session
 _CACHED_GRID: Optional[Dict[str, str]] = None
 
 
+def _get_coords() -> tuple[float, float]:
+    """Return (lat, lon) from NWS_HOME_LAT / NWS_HOME_LON env vars."""
+    lat_s = os.getenv("NWS_HOME_LAT")
+    lon_s = os.getenv("NWS_HOME_LON")
+    if not lat_s or not lon_s:
+        raise RuntimeError(
+            "NWS_HOME_LAT and NWS_HOME_LON environment variables must be set. "
+            "Example: export NWS_HOME_LAT=40.7128 NWS_HOME_LON=-74.0060"
+        )
+    return float(lat_s), float(lon_s)
+
+
 def _get_grid() -> Dict[str, str]:
-    """Return (office, grid_x, grid_y) for the home address. Caches after first call."""
+    """Return (office, grid_x, grid_y) for the configured location. Caches after first call."""
     global _CACHED_GRID
     if _CACHED_GRID is not None:
         return _CACHED_GRID
 
     import urllib.request
 
-    lat, lon = 0.0, 0.0
+    lat, lon = _get_coords()
     url = f"{_NWS_BASE}/points/{lat},{lon}"
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -206,14 +220,13 @@ def _handle_nws_forecast(args: Dict[str, Any], **kwargs) -> str:
 def _handle_nws_alerts(args: Dict[str, Any], **kwargs) -> str:
     """Handler for nws_alerts."""
     try:
-        # NWS alerts API: use point=lat,lon for location-based alerts
-        lat, lon = 0.0, 0.0
+        lat, lon = _get_coords()
         url = f"{_NWS_BASE}/alerts/active?point={lat},{lon}"
         data = _nws_fetch(url)
         features = data.get("features", [])
 
         if not features:
-            return json.dumps({"alerts": [], "message": "No active weather alerts for Trenton / Mercer County, NJ."})
+            return json.dumps({"alerts": [], "message": "No active weather alerts for your area."})
 
         result = []
         for f in features[:5]:
@@ -241,7 +254,7 @@ def _handle_nws_alerts(args: Dict[str, Any], **kwargs) -> str:
 
 NWS_NOW_SCHEMA = {
     "name": "nws_now",
-    "description": "Get current weather conditions for Trenton NJ (temperature, humidity, wind, UV index).",
+    "description": "Get current weather conditions for your configured location (temperature, humidity, wind, UV index).",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -251,7 +264,7 @@ NWS_NOW_SCHEMA = {
 
 NWS_HOURLY_SCHEMA = {
     "name": "nws_hourly",
-    "description": "Get hourly weather forecast for the next 12 hours in Trenton NJ.",
+    "description": "Get hourly weather forecast for the next 12 hours at your configured location.",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -261,7 +274,7 @@ NWS_HOURLY_SCHEMA = {
 
 NWS_FORECAST_SCHEMA = {
     "name": "nws_forecast",
-    "description": "Get 7-day weather forecast for Trenton NJ.",
+    "description": "Get 7-day weather forecast for your configured location.",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -271,7 +284,7 @@ NWS_FORECAST_SCHEMA = {
 
 NWS_ALERTS_SCHEMA = {
     "name": "nws_alerts",
-    "description": "Get active weather alerts (blizzard, flood, severe thunderstorm, etc.) for Trenton NJ / Mercer County.",
+    "description": "Get active weather alerts (blizzard, flood, severe thunderstorm, etc.) for your configured location.",
     "parameters": {
         "type": "object",
         "properties": {},

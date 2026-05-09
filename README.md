@@ -106,11 +106,13 @@ Expected output: `total: 15 | new: N | updated: M`
 
 **Location:** `custom_tools/nws_weather_tool/`
 
-Weather data for **Trenton, NJ** using the public National Weather Service API — no API key required.
+Weather data using the public National Weather Service API — no API key required.
 
-**Home address:** [REDACTED]
-**Coordinates:** 0.0, 0.0
-**Grid point:** PHI / 62, 92
+**Configuration:** Set environment variables for your home location:
+```bash
+export NWS_HOME_LAT=40.7128
+export NWS_HOME_LON=-74.0060
+```
 
 ### Tools Provided
 
@@ -136,14 +138,14 @@ Edit `~/.hermes/hermes-agent/toolsets.py`:
 
 **A) Add to `_HERMES_CORE_TOOLS`** (around line 60, after `ha_call_service`):
 ```python
-    # NWS weather (Trenton NJ — no API key needed)
+    # NWS weather (no API key needed)
     "nws_now", "nws_hourly", "nws_forecast", "nws_alerts",
 ```
 
 **B) Add `nws_weather` toolset definition** (after `homeassistant` definition):
 ```python
     "nws_weather": {
-        "description": "NWS weather for Trenton NJ — current conditions, hourly, 7-day forecast, and alerts",
+        "description": "NWS weather — current conditions, hourly, 7-day forecast, and alerts",
         "tools": ["nws_now", "nws_hourly", "nws_forecast", "nws_alerts"],
         "includes": []
     },
