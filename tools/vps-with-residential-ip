@@ -1,0 +1,19 @@
+#!/bin/bash
+# 通过 Beryl AX 住宅 IP 执行命令，完成后自动切回直连
+# 使用 trap 确保即使命令失败或被中断也切回直连
+set -e
+
+RESTORE_DIRECT() {
+    echo "🔀 切回直连 ..."
+    ~/bin/vps-exit-direct 2>/dev/null || sudo tailscale set --exit-node= 2>/dev/null
+}
+trap RESTORE_DIRECT EXIT
+
+echo "🔀 切换 VPS 出口 → Beryl AX ..."
+~/bin/vps-exit-beryl
+sleep 2
+echo "🏠 执行: $@"
+"$@"
+EXIT_CODE=$?
+echo "🏁 命令完成 (exit=$EXIT_CODE)"
+exit $EXIT_CODE
