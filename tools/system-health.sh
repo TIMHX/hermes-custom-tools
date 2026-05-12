@@ -280,5 +280,118 @@ echo "## 🟢 BBR"
 sysctl net.ipv4.tcp_congestion_control 2>/dev/null
 echo ""
 
+# ═══════════════════════════════════════
+# 12a. Exit Node 出口管理
+# ═══════════════════════════════════════
+echo "## 🚪 Tailscale 出口管理"
+
+# 谁在广告 exit node
+ts_status=$(tailscale status 2>/dev/null)
+echo "--- 广告 Exit Node ---"
+echo "$ts_status" | grep "offers exit node" | while read line; do
+    echo "✅ $(echo $line | awk '{print $2, $1}')"
+done
+
+# VPS 自己在用谁的出口
+exit_host=$(tailscale status --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+for k,v in d.get('Peer',{}).items():
+    if v.get('ExitNodeOption'):
+        print(v.get('HostName',k))
+        break
+" 2>/dev/null)
+if [ -n "$exit_host" ] && [ "$exit_host" != "No exit node" ]; then
+    echo "⚠️ VPS 出口: $exit_host（非直连，如需切回: ~/bin/vps-exit-direct）"
+    
+    # 验证出口可用
+    http_code=$(curl -sk -o /dev/null -w "%{http_code}" --connect-timeout 5 https://order.chownow.com/ 2>/dev/null || echo "000")
+    if [ "$http_code" = "200" ]; then
+        echo "   ✅ 出口验证: order.chownow.com → HTTP $http_code"
+    else
+        echo "   ❌ 出口验证: order.chownow.com → HTTP $http_code"
+    fi
+else
+    echo "✅ VPS 出口: 直连（不依赖家庭网络）"
+fi
+echo ""
+
+# ═══════════════════════════════════════
+# 12b. Tailscale SSH 状态
+# ═══════════════════════════════════════
+echo "## 🔗 Tailscale SSH"
+vps_ssh=$(tailscale debug prefs 2>/dev/null | grep -c '"RunSSH": true')
+[ "$vps_ssh" -gt 0 ] && echo "✅ VPS: Tailscale SSH 已启用" || echo "⚠️ VPS: Tailscale SSH 未启用"
+
+# Beryl AX
+beryl_ssh=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "echo OK" 2>&1) || true
+if echo "$beryl_ssh" | grep -q "OK"; then
+    echo "✅ Beryl AX: Tailscale SSH 可达"
+else
+    echo "⚠️ Beryl AX: SSH 异常 — $beryl_ssh"
+fi
+echo ""
+
+# ═══════════════════════════════════════
+# 12c. Windows SSH 安全审计
+# ═══════════════════════════════════════
+echo "## 🪟 Windows SSH 安全"
+
+# Windows 检查
+win_check=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "Xing Hong@tim-pc" "sc query sshd 2>nul & findstr /i PasswordAuthentication C:\\ProgramData\\ssh\\sshd_config & findstr /i PubkeyAuthentication C:\\ProgramData\\ssh\\sshd_config & findstr /i KbdInteractive C:\\ProgramData\\ssh\\sshd_config" 2>&1) || true
+
+if echo "$win_check" | grep -q "RUNNING"; then
+    echo "✅ sshd: 运行中"
+else
+    echo "❌ sshd: 未运行"
+fi
+
+echo "$win_check" | grep -q "PasswordAuthentication no" && echo "✅ PasswordAuthentication: no" || echo "❌ PasswordAuthentication 不安全"
+echo "$win_check" | grep -q "PubkeyAuthentication yes" && echo "✅ PubkeyAuthentication: yes" || echo "⚠️ PubkeyAuthentication 异常"
+echo "$win_check" | grep -q "KbdInteractiveAuthentication no" && echo "✅ KbdInteractive: no" || echo "⚠️ KbdInteractive 未禁用"
+
+# admins 密钥
+win_keys=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "Xing Hong@tim-pc" "type C:\\ProgramData\\ssh\\administrators_authorized_keys" 2>/dev/null | wc -l) || true
+echo "  已授权密钥: $win_keys 把"
+
+# Windows Tailscale exit node
+echo "$ts_status" | grep "tim-pc" | grep -q "offers exit node" && echo "✅ Exit node: 广告中" || echo "⚠️ Exit node: 未广告"
+echo ""
+
+# ═══════════════════════════════════════
+# 12d. Beryl AX 安全检查
+# ═══════════════════════════════════════
+echo "## 📡 Beryl AX 安全"
+
+beryl_info=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "iw dev 2>/dev/null | grep Interface | wc -l; echo '---'; cat /etc/config/tailscale 2>/dev/null | grep -c 'lan_enabled.*1'; echo '---'; cat /etc/config/tailscale 2>/dev/null | grep -c 'wan_enabled.*1'" 2>&1) || true
+
+if echo "$beryl_info" | grep -q "^0$"; then
+    wifi_count=$(echo "$beryl_info" | sed -n '1p')
+    [ "$wifi_count" = "0" ] && echo "✅ WiFi: 关闭" || echo "⚠️ WiFi: $wifi_count 个接口活跃"
+else
+    echo "⚠️ WiFi: 检查失败"
+fi
+
+lan_en=$(echo "$beryl_info" | sed -n '3p')
+wan_en=$(echo "$beryl_info" | sed -n '5p')
+[ "$lan_en" = "1" ] && echo "✅ Tailscale LAN: 已启用" || echo "⚠️ Tailscale LAN: 未启用"
+[ "$wan_en" = "1" ] && echo "✅ Tailscale WAN: 已启用" || echo "⚠️ Tailscale WAN: 未启用"
+
+echo "$ts_status" | grep "gl-mt3000" | grep -qE "exit node" && echo "✅ Exit node: 广告/使用中" || echo "⚠️ Exit node: 未广告"
+echo ""
+
+# ═══════════════════════════════════════
+# 12e. 跨节点 SSH 互通测试
+# ═══════════════════════════════════════
+echo "## 🔁 SSH 互通"
+
+# VPS → Beryl AX
+ssh -o ConnectTimeout=4 -o BatchMode=yes root@gl-mt3000 "echo OK" 2>/dev/null | grep -q OK && echo "✅ VPS → Beryl AX" || echo "❌ VPS → Beryl AX"
+
+# VPS → Windows
+ssh -o ConnectTimeout=4 -o BatchMode=yes "Xing Hong@tim-pc" "echo OK" 2>/dev/null | grep -q OK && echo "✅ VPS → Windows" || echo "❌ VPS → Windows"
+
+echo ""
+
 echo "---"
 echo "✅ 周报完毕 — 下次运行：下周一 9:00 EDT"
