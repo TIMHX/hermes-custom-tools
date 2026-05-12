@@ -1,41 +1,32 @@
 diff --git a/toolsets.py b/toolsets.py
-index 57e226d3c..02ed2f10d 100644
+index 5e34a0548..4af29aceb 100644
 --- a/toolsets.py
 +++ b/toolsets.py
-@@ -65,6 +65,8 @@ _HERMES_CORE_TOOLS = [
-     # zero schema footprint. Gated via check_fn in tools/kanban_tools.py.
-     "kanban_show", "kanban_complete", "kanban_block", "kanban_heartbeat",
-     "kanban_comment", "kanban_create", "kanban_link",
+@@ -70,6 +70,8 @@ _HERMES_CORE_TOOLS = [
+     "kanban_unblock",
+     # Computer use (macOS, gated on cua-driver being installed via check_fn)
+     "computer_use",
 +    # NWS weather (Trenton NJ — no API key needed)
 +    "nws_now", "nws_hourly", "nws_forecast", "nws_alerts",
  ]
  
  
-@@ -246,15 +248,24 @@ TOOLSETS = {
-             "yb_search_sticker",
-             "yb_send_sticker",
-         ],
-+        "includes": [],
-+    },
-+
+@@ -271,6 +273,18 @@ TOOLSETS = {
+         "includes": []
+     },
+ 
 +    "nws_weather": {
 +        "description": "NWS weather for Trenton NJ — current conditions, hourly, 7-day forecast, and alerts",
 +        "tools": ["nws_now", "nws_hourly", "nws_forecast", "nws_alerts"],
-         "includes": []
-     },
- 
--    "feishu_doc": {
--        "description": "Read Feishu/Lark document content",
--        "tools": ["feishu_doc_read"],
++        "includes": []
++    },
++
 +    "github_scouter": {
 +        "description": "GitHub Trending scouter — fetch top projects from the last 20 days, record to Notion",
 +        "tools": ["github_scouter"],
-         "includes": []
-     },
- 
-+    "feishu_doc": {
++        "includes": []
 +    },
 +
-     "feishu_drive": {
-         "description": "Feishu/Lark document comment operations (list, reply, add)",
-         "tools": [
+     "feishu_doc": {
+         "description": "Read Feishu/Lark document content",
+         "tools": ["feishu_doc_read"],
