@@ -4,13 +4,14 @@ Queries NWS API. Outputs alert on severe weather; silent otherwise.
 Designed for hermes-agent no_agent cron mode."""
 
 import json
+import os
 import sys
 import time
 import urllib.request
 import urllib.error
 
-LAT, LON = 40.2206, -74.7597  # Trenton, NJ
-USER_AGENT = "hermes-weather-watchdog/1.0 (personal use)"
+LAT, LON = float(os.getenv("NWS_HOME_LAT", "0")), float(os.getenv("NWS_HOME_LON", "0"))
+USER_AGENT = "hermes-weather-watchdog/1.0"
 TIMEOUT = 15
 MAX_RETRIES = 2
 

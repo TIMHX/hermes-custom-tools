@@ -1,17 +1,17 @@
 #!/bin/bash
-# 系统运维周报 — 每周全面健康检查（含安全审计）
+# 系统运维日报 — 每日全面健康检查（含安全审计）
 # 检查：服务、证书、连接、资源、安全加固、攻击面
 
 set -e
 
-echo "# 🖥️ 系统运维周报 — $(date '+%Y-%m-%d %H:%M %Z')"
+echo "# 🖥️ 系统运维日报 — $(date '+%Y-%m-%d %H:%M %Z')"
 echo ""
 
 # ═══════════════════════════════════════
 # 1. 核心服务
 # ═══════════════════════════════════════
 echo "## 📋 核心服务"
-for svc in caddy derper ssh-2222 tailscaled fail2ban; do
+for svc in caddy derper tailscaled fail2ban; do
     state=$(systemctl is-active $svc 2>/dev/null || echo "缺失")
     if [ "$state" = "active" ]; then
         echo "✅ $svc"
@@ -103,7 +103,7 @@ ufw_state=$(sudo /usr/sbin/ufw status 2>&1 | head -1)
 echo "$ufw_state"
 
 # 必需端口
-for port_spec in "80/tcp" "443/tcp" "3478/udp" "2222/tcp"; do
+for port_spec in "80/tcp" "443/tcp" "3478/udp"; do
     if sudo /usr/sbin/ufw status 2>&1 | grep -q "$port_spec.*ALLOW"; then
         echo "✅ $port_spec"
     else
@@ -142,34 +142,13 @@ else
     echo "  ❌ sshd_config 缺失"
 fi
 
-# 2222 端口
-echo "--- 后备 SSH (2222/公网) ---"
-if [ -f /etc/ssh/sshd_config_2222 ]; then
-    for key in "PasswordAuthentication" "PubkeyAuthentication" "PermitRootLogin"; do
-        val=$(sudo grep "^$key " /etc/ssh/sshd_config_2222 2>/dev/null | awk '{print $NF}' || echo "?")
-        case "$key:$val" in
-            PasswordAuthentication:no) echo "  ✅ $key: $val" ;;
-            PubkeyAuthentication:yes) echo "  ✅ $key: $val" ;;
-            PermitRootLogin:prohibit-password|PermitRootLogin:no) echo "  ✅ $key: $val" ;;
-            *) echo "  ⚠️ $key: $val" ;;
-        esac
-    done
-else
-    echo "  ❌ sshd_config_2222 缺失"
-fi
-
-# 失败登录统计
-echo "--- 失败登录 (24h) ---"
-fail_ssh=$(sudo journalctl -u ssh-2222.service --since "24 hours ago" 2>/dev/null | grep -ci "Failed\|Invalid" || echo "0")
-fail_ssh=${fail_ssh:-0}
-echo "  ssh-2222: $fail_ssh 次"
 echo ""
 
 # ═══════════════════════════════════════
 # 7. fail2ban
 # ═══════════════════════════════════════
 echo "## 🚫 fail2ban"
-for jail in sshd ssh-2222; do
+for jail in sshd; do
     status=$(sudo fail2ban-client status $jail 2>&1)
     if echo "$status" | grep -q "Status for"; then
         banned=$(echo "$status" | grep "Total banned" | awk '{print $NF}')
@@ -264,6 +243,12 @@ else
     echo "⚠️ APT: $pending 个包待更新"
 fi
 
+# 安全更新独立计数
+sec_updates=$(apt list --upgradable 2>/dev/null | grep -i security | wc -l)
+if [ "${sec_updates:-0}" -gt 0 ]; then
+    echo "🔴 APT 安全更新: $sec_updates 个待处理！"
+fi
+
 # Homebrew（如安装）
 BREW_PATH="/home/linuxbrew/.linuxbrew/bin/brew"
 if [ -x "$BREW_PATH" ]; then
@@ -281,7 +266,75 @@ sysctl net.ipv4.tcp_congestion_control 2>/dev/null
 echo ""
 
 # ═══════════════════════════════════════
-# 12a. Exit Node 出口管理
+# 12. VPS 安全基线（版本 + CVE 风险）
+# ═══════════════════════════════════════
+echo "## 🔬 VPS 安全基线"
+
+# Caddy 版本
+caddy_ver=$(caddy version 2>/dev/null | head -1 | awk '{print $1}' | sed 's/v//')
+echo "Caddy: v${caddy_ver:-?}"
+# 检查是否低于 2.11.2（2026年8个CVE的修复版本）
+caddy_major=$(echo "${caddy_ver:-0}" | cut -d. -f1)
+caddy_minor=$(echo "${caddy_ver:-0}" | cut -d. -f2)
+if [ "$caddy_major" -gt 2 ] || ([ "$caddy_major" -eq 2 ] && [ "${caddy_minor:-0}" -ge 12 ]); then
+    echo "  ✅ Caddy >= 2.12，2026 CVE 已修复"
+elif [ "$caddy_major" -eq 2 ] && [ "$caddy_minor" -eq 11 ] && [ "$(echo "$caddy_ver" | cut -d. -f3)" -ge 2 ]; then
+    echo "  ✅ Caddy = 2.11.2，2026 CVE 已修复"
+else
+    echo "  ❌ Caddy < 2.11.2，存在已知 CVE 风险！"
+fi
+
+# Caddy 配置风险评估：不使用 vars_regexp / FastCGI / forward_auth
+caddyfile="/etc/caddy/Caddyfile"
+if [ -f "$caddyfile" ]; then
+    if grep -q "vars_regexp" "$caddyfile" 2>/dev/null; then
+        echo "  ⚠️ Caddy 使用了 vars_regexp (CVE-2026-30852 相关)"
+    else
+        echo "  ✅ 未使用 vars_regexp (CVE-2026-30852 不适用)"
+    fi
+    if grep -qi "fastcgi\|php_fastcgi" "$caddyfile" 2>/dev/null; then
+        echo "  ⚠️ Caddy 配置了 FastCGI (CVE-2026-27590 相关)"
+    else
+        echo "  ✅ 未使用 FastCGI (CVE-2026-27590 不适用)"
+    fi
+    if grep -qi "forward_auth" "$caddyfile" 2>/dev/null; then
+        echo "  ⚠️ Caddy 配置了 forward_auth (CVE-2026-30851 相关)"
+    else
+        echo "  ✅ 未使用 forward_auth (CVE-2026-30851 不适用)"
+    fi
+fi
+
+# OpenSSH 版本
+ssh_ver=$(ssh -V 2>&1 | head -1 | grep -oP 'OpenSSH_\K[\d.p]+')
+echo "OpenSSH: ${ssh_ver:-?}"
+# regreSSHion (CVE-2024-6387) 检查
+if dpkg -l openssh-server 2>/dev/null | grep -q "9.6p1-3ubuntu13"; then
+    echo "  ✅ regreSSHion 补丁已安装"
+fi
+
+# Tailscale 版本
+ts_ver=$(tailscale version 2>/dev/null | head -1)
+echo "Tailscale: ${ts_ver:-?}"
+
+# 监听端口审计
+echo "--- 公网暴露端口 ---"
+pub_ports=$(sudo ss -tlnp 2>/dev/null | grep -v "127.0.0.1\|::1\|tailscale0\|100\." | grep LISTEN)
+if [ -z "$pub_ports" ]; then
+    echo "  ✅ 无意外公网暴露"
+else
+    echo "$pub_ports" | while read line; do
+        echo "  ℹ️ $line"
+    done
+fi
+
+# 非预期服务检查（8644 不应公网可达）
+if sudo ss -tlnp 2>/dev/null | grep 8644 | grep -q "0.0.0.0"; then
+    echo "  ℹ️ Hermes:8644 绑 0.0.0.0（ufw 阻止公网，仅 Tailscale 可达）"
+fi
+echo ""
+
+# ═══════════════════════════════════════
+# 13a. Exit Node 出口管理
 # ═══════════════════════════════════════
 echo "## 🚪 Tailscale 出口管理"
 
@@ -317,14 +370,14 @@ fi
 echo ""
 
 # ═══════════════════════════════════════
-# 12b. Tailscale SSH 状态
+# 13b. Tailscale SSH 状态
 # ═══════════════════════════════════════
 echo "## 🔗 Tailscale SSH"
 vps_ssh=$(tailscale debug prefs 2>/dev/null | grep -c '"RunSSH": true')
 [ "$vps_ssh" -gt 0 ] && echo "✅ VPS: Tailscale SSH 已启用" || echo "⚠️ VPS: Tailscale SSH 未启用"
 
 # Beryl AX
-beryl_ssh=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "echo OK" 2>&1) || true
+beryl_ssh=$(timeout 15 ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "echo OK" 2>&1) || true
 if echo "$beryl_ssh" | grep -q "OK"; then
     echo "✅ Beryl AX: Tailscale SSH 可达"
 else
@@ -333,12 +386,12 @@ fi
 echo ""
 
 # ═══════════════════════════════════════
-# 12c. Windows SSH 安全审计
+# 13c. Windows SSH 安全审计
 # ═══════════════════════════════════════
 echo "## 🪟 Windows SSH 安全"
 
 # Windows 检查
-win_check=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "Xing Hong@tim-pc" "sc query sshd 2>nul & findstr /i PasswordAuthentication C:\\ProgramData\\ssh\\sshd_config & findstr /i PubkeyAuthentication C:\\ProgramData\\ssh\\sshd_config & findstr /i KbdInteractive C:\\ProgramData\\ssh\\sshd_config" 2>&1) || true
+win_check=$(timeout 15 ssh -o ConnectTimeout=5 -o BatchMode=yes "Xing Hong@tim-pc" "sc query sshd 2>nul & findstr /i PasswordAuthentication C:\\ProgramData\\ssh\\sshd_config & findstr /i PubkeyAuthentication C:\\ProgramData\\ssh\\sshd_config & findstr /i KbdInteractive C:\\ProgramData\\ssh\\sshd_config" 2>&1) || true
 
 if echo "$win_check" | grep -q "RUNNING"; then
     echo "✅ sshd: 运行中"
@@ -351,7 +404,7 @@ echo "$win_check" | grep -q "PubkeyAuthentication yes" && echo "✅ PubkeyAuthen
 echo "$win_check" | grep -q "KbdInteractiveAuthentication no" && echo "✅ KbdInteractive: no" || echo "⚠️ KbdInteractive 未禁用"
 
 # admins 密钥
-win_keys=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "Xing Hong@tim-pc" "type C:\\ProgramData\\ssh\\administrators_authorized_keys" 2>/dev/null | wc -l) || true
+win_keys=$(timeout 15 ssh -o ConnectTimeout=5 -o BatchMode=yes "Xing Hong@tim-pc" "type C:\\ProgramData\\ssh\\administrators_authorized_keys" 2>/dev/null | wc -l) || true
 echo "  已授权密钥: $win_keys 把"
 
 # Windows Tailscale exit node
@@ -359,11 +412,11 @@ echo "$ts_status" | grep "tim-pc" | grep -q "offers exit node" && echo "✅ Exit
 echo ""
 
 # ═══════════════════════════════════════
-# 12d. Beryl AX 安全检查
+# 13d. Beryl AX 安全检查
 # ═══════════════════════════════════════
 echo "## 📡 Beryl AX 安全"
 
-beryl_info=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "iw dev 2>/dev/null | grep Interface | wc -l; echo '---'; cat /etc/config/tailscale 2>/dev/null | grep -c 'lan_enabled.*1'; echo '---'; cat /etc/config/tailscale 2>/dev/null | grep -c 'wan_enabled.*1'" 2>&1) || true
+beryl_info=$(timeout 15 ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "iw dev 2>/dev/null | grep Interface | wc -l; echo '---'; cat /etc/config/tailscale 2>/dev/null | grep -c 'lan_enabled.*1'; echo '---'; cat /etc/config/tailscale 2>/dev/null | grep -c 'wan_enabled.*1'" 2>&1) || true
 
 if echo "$beryl_info" | grep -q "^0$"; then
     wifi_count=$(echo "$beryl_info" | sed -n '1p')
@@ -381,17 +434,39 @@ echo "$ts_status" | grep "gl-mt3000" | grep -qE "exit node" && echo "✅ Exit no
 echo ""
 
 # ═══════════════════════════════════════
-# 12e. 跨节点 SSH 互通测试
+# 13e. Tailscale ACL 隔离验证
+# ═══════════════════════════════════════
+echo "## 🔐 ACL 隔离验证"
+
+# 从 Beryl AX 尝试 SSH 到 VPS（应该失败—— tag:router 不允许出站 SSH）
+beryl_to_vps=$(timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "timeout 5 ssh -o ConnectTimeout=3 -o BatchMode=yes root@100.82.77.91 'echo OK' 2>&1" 2>&1) || true
+if echo "$beryl_to_vps" | grep -q "OK"; then
+    echo "❌ Beryl AX → VPS: SSH 可达（ACL 隔离失效！）"
+else
+    echo "✅ Beryl AX → VPS: SSH 阻断（tag:router 隔离生效）"
+fi
+
+# 从 Beryl AX 尝试访问其他 tailnet 节点
+beryl_to_mother=$(timeout 10 ssh -o ConnectTimeout=5 -o BatchMode=yes root@gl-mt3000 "timeout 5 ssh -o ConnectTimeout=3 -o BatchMode=yes Xing\ Hong@100.70.105.128 'echo OK' 2>&1" 2>&1) || true
+if echo "$beryl_to_mother" | grep -q "OK"; then
+    echo "❌ Beryl AX → mother: SSH 可达（ACL 隔离失效！）"
+else
+    echo "✅ Beryl AX → mother: SSH 阻断（tag:router 隔离生效）"
+fi
+echo ""
+
+# ═══════════════════════════════════════
+# 13f. 跨节点 SSH 互通测试
 # ═══════════════════════════════════════
 echo "## 🔁 SSH 互通"
 
 # VPS → Beryl AX
-ssh -o ConnectTimeout=4 -o BatchMode=yes root@gl-mt3000 "echo OK" 2>/dev/null | grep -q OK && echo "✅ VPS → Beryl AX" || echo "❌ VPS → Beryl AX"
+timeout 10 ssh -o ConnectTimeout=4 -o BatchMode=yes root@gl-mt3000 "echo OK" 2>/dev/null | grep -q OK && echo "✅ VPS → Beryl AX" || echo "❌ VPS → Beryl AX"
 
 # VPS → Windows
-ssh -o ConnectTimeout=4 -o BatchMode=yes "Xing Hong@tim-pc" "echo OK" 2>/dev/null | grep -q OK && echo "✅ VPS → Windows" || echo "❌ VPS → Windows"
+timeout 10 ssh -o ConnectTimeout=4 -o BatchMode=yes "Xing Hong@tim-pc" "echo OK" 2>/dev/null | grep -q OK && echo "✅ VPS → Windows" || echo "❌ VPS → Windows"
 
 echo ""
 
 echo "---"
-echo "✅ 周报完毕 — 下次运行：下周一 9:00 EDT"
+echo "✅ 日报完毕 — 下次运行：明天 9:00 EDT"
