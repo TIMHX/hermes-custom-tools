@@ -126,7 +126,7 @@ def search_searxng(queries: list[str], max_results: int = 8) -> list[dict]:
     all_results = []
     seen_urls = set()
 
-    for query in queries[:5]:
+    for query in queries[:8]:
         try:
             encoded_query = urllib.parse.quote(query)
             api_url = (
@@ -174,7 +174,7 @@ def _search_tavily(queries: list[str], max_results: int = 8, seen_urls: set = No
     if seen_urls is None:
         seen_urls = set()
 
-    for query in queries[:5]:
+    for query in queries[:8]:
         try:
             body = json.dumps({
                 "query": query,
@@ -380,13 +380,18 @@ def search_all_domains() -> dict:
             f"immigration policy news {month_abbr} 2026",
             f"geopolitics international relations news today",
             f"financial markets stock market news {date_compact}",
+            f"stock market biggest gainers movers today",
+            f"Wall Street top stories market moving news this week",
+            f"stock sector rotation which sectors outperforming {month_abbr} 2026",
+            f"US stocks rally surge what is driving markets {date_compact}",
         ],
-        "tech_science": [
+        "tech": [
             f"AI artificial intelligence news {date_compact}",
             f"technology semiconductor chip news {month_abbr} 2026",
-            f"archaeology discovery paleontology news {month_abbr} 2026",
-            f"astronomy space exploration news today",
-            f"scientific breakthrough research news {month_abbr} 2026",
+            f"quantum computing breakthrough news {month_abbr} 2026",
+            f"cybersecurity data breach vulnerability news {month_abbr} 2026",
+            f"robotics autonomous drone news {month_abbr} 2026",
+            f"consumer electronics tech product launch news {month_abbr} 2026",
         ],
         "energy_climate_health": [
             f"renewable energy news {month_abbr} {day} 2026",
@@ -395,13 +400,27 @@ def search_all_domains() -> dict:
             f"public health epidemiology news {month_abbr} 2026",
             f"oceanography marine biology discovery news today",
         ],
+        "science": [
+            f"archaeology discovery paleontology news {month_abbr} 2026",
+            f"astronomy space exploration news today",
+            f"scientific breakthrough research news {month_abbr} 2026",
+            f"physics particle discovery news {month_abbr} 2026",
+            f"neuroscience brain research news {month_abbr} 2026",
+        ],
+        "finance_cn": [
+            f"美股 涨幅 板块 今日 热点",
+            f"美股 异动 行情 财经新闻",
+            f"华尔街 今日 头条 市场",
+        ],
     }
 
     all_domain_results = {}
     domain_labels = {
         "macro": "一、宏观经济与政治",
-        "tech_science": "二、科技与科学",
+        "tech": "二、科技",
         "energy_climate_health": "三、能源 / 气候与环境 / 健康",
+        "science": "四、科学探索",
+        "finance_cn": "五、财经热点",
     }
 
     for key, queries in domains.items():
@@ -418,7 +437,7 @@ def generate_briefing(news_data: dict, today_str: str) -> str:
     """Generate Chinese briefing, trying each LLM in chain."""
     # Build user message with news data
     news_text = ""
-    for key in ["macro", "tech_science", "energy_climate_health"]:
+    for key in ["macro", "tech", "energy_climate_health", "science", "finance_cn"]:
         domain = news_data.get(key, {})
         news_text += f"\n## {domain.get('label', key)}\n"
         for i, story in enumerate(domain.get("stories", []), 1):
@@ -458,13 +477,25 @@ Daily Briefing -- {today_str}
   中文摘要...
   🔗 https://...
 
-## 二、科技与科学
+## 二、科技
 
 • ...
   ...
   🔗 ...
 
 ## 三、能源 / 气候与环境 / 健康
+
+• ...
+  ...
+  🔗 ...
+
+## 四、科学探索
+
+• ...
+  ...
+  🔗 ...
+
+## 五、财经热点
 
 • ...
   ...
