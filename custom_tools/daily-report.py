@@ -1797,6 +1797,78 @@ def check_gitnexus_version() -> dict[str, Any]:
     }
 
 
+def check_context7() -> dict[str, Any]:
+    """Context7 MCP health — process alive, version, wrapper detection."""
+    import subprocess as _sp
+
+    # 1. Process check — pgrep then filter by /proc/<pid>/exe to only count
+    #    processes running under the node binary (excludes pgrep, bash, etc.)
+    p = _sp.run(
+        ["pgrep", "-f", "context7-mcp"],
+        capture_output=True, text=True, timeout=5,
+    )
+    proc_count = 0
+    if p.stdout.strip():
+        for pid_str in p.stdout.strip().split():
+            try:
+                exe = os.readlink(f"/proc/{pid_str}/exe")
+                if "node" in exe:
+                    proc_count += 1
+            except (FileNotFoundError, PermissionError, OSError):
+                pass
+
+    # 2. Wrapper detection — pgrep for npm+context7, filter by /proc/<pid>/exe
+    p2 = _sp.run(
+        ["pgrep", "-f", "npm exec.*context7"],
+        capture_output=True, text=True, timeout=5,
+    )
+    npm_wrapper_count = 0
+    if p2.stdout.strip():
+        for pid_str in p2.stdout.strip().split():
+            try:
+                exe = os.readlink(f"/proc/{pid_str}/exe")
+                if "npm" in exe or "node" in exe:
+                    npm_wrapper_count += 1
+            except (FileNotFoundError, PermissionError, OSError):
+                pass
+    using_npm_wrapper = npm_wrapper_count > 0
+
+    # 3. Installed version (global)
+    rc3, installed_out, _ = run_cmd(
+        ["npm", "list", "-g", "@upstash/context7-mcp", "--depth=0"],
+        timeout=CMD_TIMEOUT,
+    )
+    installed_version = None
+    if rc3 == 0 and installed_out:
+        m = re.search(r'@upstash/context7-mcp@(\S+)', installed_out)
+        if m:
+            installed_version = m.group(1)
+
+    # 4. Latest version from npm registry
+    rc4, latest_v, _ = run_cmd(
+        ["npm", "view", "@upstash/context7-mcp", "version"],
+        timeout=CMD_TIMEOUT,
+    )
+    latest_version = latest_v.strip() if rc4 == 0 else None
+
+    update_available = False
+    if installed_version and latest_version:
+        try:
+            update_available = _parse_version(latest_version) > _parse_version(installed_version)
+        except (ValueError, TypeError):
+            update_available = latest_version != installed_version
+
+    return {
+        "ok": proc_count > 0,
+        "process_count": proc_count,
+        "using_npm_wrapper": using_npm_wrapper,
+        "installed_version": installed_version,
+        "latest_version": latest_version,
+        "update_available": update_available,
+        "upgrade_command": "npm install -g @upstash/context7-mcp@latest" if update_available else None,
+    }
+
+
 def check_bitwarden_sm() -> dict[str, Any]:
     """Bitwarden Secrets Manager health check."""
     rc, stdout, stderr = run_cmd([BWS_BIN, "project", "list"], timeout=CMD_TIMEOUT)
@@ -2118,6 +2190,7 @@ def main() -> None:
         "health": _safe_check("gitnexus_health", check_gitnexus),
         "version": _safe_check("gitnexus_version", check_gitnexus_version),
     }
+    applications["context7"] = _safe_check("context7", check_context7)
     applications["bitwarden_sm"] = _safe_check("bitwarden_sm", check_bitwarden_sm)
     applications["local_bin"] = _safe_check("local_bin", check_local_bin)
 
