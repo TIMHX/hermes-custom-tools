@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GitHub Trending Scouter - Hermes Tool
-抓取 GitHub 过去 20 天热门项目，记录到 Notion 并返回列表。
+抓取 GitHub 过去 7 天热门项目，记录到 Notion 并返回列表。
 """
 import json
 import subprocess
@@ -145,8 +145,8 @@ class NotionClient:
 # ------------------------------------------------------------------
 
 def fetch_github_trending() -> list:
-    """获取最近 20 天内创建的、Star 最多的 15 个项目"""
-    days_ago = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+    """获取最近 7 天内创建的、Star 最多的 15 个项目"""
+    days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
     query = f"created:>{days_ago}"
     encoded_query = urllib.parse.quote(query)
     url = f"https://api.github.com/search/repositories?q={encoded_query}&sort=stars&order=desc&per_page=15"
@@ -233,7 +233,7 @@ def _handle_github_scouter(args: Dict[str, Any], **kwargs) -> str:
 
 GITHUB_SCOUTER_SCHEMA = {
     "name": "github_scouter",
-    "description": "抓取 GitHub 过去 20 天热门项目（按 star 排序），记录到 Notion，返回项目列表。",
+    "description": "抓取 GitHub 过去 7 天热门项目（按 star 排序），记录到 Notion，返回项目列表。",
     "parameters": {
         "type": "object",
         "properties": {},

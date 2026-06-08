@@ -126,16 +126,13 @@ def _handle_nws_now(args: Dict[str, Any], **kwargs) -> str:
     """Handler for nws_now."""
     try:
         grid = _get_grid()
-        # Use grid data directly for current conditions (more reliable than station)
         grid_url = f"{_NWS_BASE}/gridpoints/{grid['office']}/{grid['grid_x']},{grid['grid_y']}"
         grid_data = _nws_fetch(grid_url)
 
-        # Get current temperature from grid data
         temp_data = grid_data.get("properties", {}).get("temperature", {})
         temp_values = temp_data.get("values", []) if isinstance(temp_data, dict) else []
         current_temp_c = None
         if temp_values:
-            # Most recent valid temperature value
             for v in reversed(temp_values):
                 if v.get("value") is not None:
                     current_temp_c = v["value"]
@@ -148,7 +145,6 @@ def _handle_nws_now(args: Dict[str, Any], **kwargs) -> str:
         else:
             temp_str = "N/A"
 
-        # Get weather description from the first forecast period
         forecast_url = f"{_NWS_BASE}/gridpoints/{grid['office']}/{grid['grid_x']},{grid['grid_y']}/forecast"
         forecast_data = _nws_fetch(forecast_url)
         periods = forecast_data.get("properties", {}).get("periods", [])

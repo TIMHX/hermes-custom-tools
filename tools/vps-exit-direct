@@ -1,5 +1,0 @@
-#!/bin/bash
-# 切换 VPS 走直连（自己的公网 IP）
-set -e
-sudo tailscale set --exit-node=
-echo "✅ VPS 出口 → 直连"

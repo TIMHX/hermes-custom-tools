@@ -534,9 +534,9 @@ def check_searxng_engines() -> dict[str, Any]:
     """
     # Try search API first (needs public_instance=true or Referer bypass)
     rc, result_json, _ = run_cmd(
-        f"curl -s -w '\\n%{{http_code}}' --max-time 8 "
+        f"curl -s -w '\\n%{{http_code}}' --max-time 25 "
         f"'{SEARXNG_URL}/search?q=test&format=json&limit=1' 2>/dev/null",
-        shell=True, timeout=12,
+        shell=True, timeout=30,
     )
     if not result_json:
         return {"ok": False, "error": "SearXNG API no response", "blocked": [], "blocked_count": 0}
@@ -1683,9 +1683,9 @@ def check_searxng_health() -> dict[str, Any]:
     api_error = None
     if container_running:
         rc_api, stdout_api, _ = run_cmd(
-            ["curl", "-s", "-w", "\n%{http_code}", "--max-time", "8",
+            ["curl", "-s", "-w", "\n%{http_code}", "--max-time", "25",
              f"{SEARXNG_URL}/search?q=test&format=json&limit=1"],
-            timeout=15,
+            timeout=30,
         )
         if stdout_api:
             # Split body from trailing HTTP status code
