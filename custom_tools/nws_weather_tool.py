@@ -2,11 +2,19 @@
 
 Uses the public NWS API at https://api.weather.gov/ — no API key required.
 
-Configuration via environment variables:
-  NWS_HOME_LAT  — home latitude  (e.g. 40.7128)
-  NWS_HOME_LON  — home longitude (e.g. -74.0060)
+Configuration (3-level fallback, first match wins):
+  1. NWS_HOME_LAT / NWS_HOME_LON env vars (direct override)
+  2. NWS_PROFILE env var → ~/.hermes/config/nws_profiles.json
+  3. "default" key in nws_profiles.json
 
-If not set, the tools raise a clear error so the user knows what to configure.
+Profiles file format:
+  {
+    "default": "trenton",
+    "profiles": {
+      "trenton": {"name": "Trenton, NJ", "lat": 40.2085, "lon": -74.7598},
+      "lax":     {"name": "Los Angeles, CA", "lat": 33.9416, "lon": -118.4085}
+    }
+  }
 
 Registers four LLM-callable tools:
 - ``nws_now``       -- current conditions (temp, humidity, wind, etc.)
@@ -29,20 +37,55 @@ logger = logging.getLogger(__name__)
 _USER_AGENT = "Hermes-NWS-Tool/1.0"
 _NWS_BASE = "https://api.weather.gov"
 
+_CONFIG_PATH = os.path.expanduser("~/.hermes/config/nws_profiles.json")
+
 # Cached grid point — refreshed once per session
 _CACHED_GRID: Optional[Dict[str, str]] = None
+_CACHED_LOCATION_NAME: Optional[str] = None
+
+
+def _load_profile() -> tuple[float, float, str]:
+    """Return (lat, lon, display_name) via 3-level fallback."""
+    # Level 1: Direct env var override
+    lat_s = os.getenv("NWS_HOME_LAT")
+    lon_s = os.getenv("NWS_HOME_LON")
+    if lat_s and lon_s:
+        return float(lat_s), float(lon_s), "Configured Location"
+
+    # Level 2-3: Profile config
+    try:
+        with open(_CONFIG_PATH) as f:
+            config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        raise RuntimeError(
+            "NWS_HOME_LAT/LON not set and nws_profiles.json not found. "
+            "Create ~/.hermes/config/nws_profiles.json or set NWS_HOME_LAT/LON."
+        )
+
+    profile_name = os.getenv("NWS_PROFILE", config.get("default", "trenton"))
+    profiles = config.get("profiles", {})
+    if profile_name not in profiles:
+        available = ", ".join(profiles.keys())
+        raise RuntimeError(
+            f"NWS profile '{profile_name}' not found. Available: {available}"
+        )
+
+    p = profiles[profile_name]
+    return p["lat"], p["lon"], p.get("name", profile_name)
+
+
+def _get_location_name() -> str:
+    """Return cached human-readable location name (e.g. 'Trenton, NJ')."""
+    global _CACHED_LOCATION_NAME
+    if _CACHED_LOCATION_NAME is None:
+        _lat, _lon, _CACHED_LOCATION_NAME = _load_profile()
+    return _CACHED_LOCATION_NAME
 
 
 def _get_coords() -> tuple[float, float]:
-    """Return (lat, lon) from NWS_HOME_LAT / NWS_HOME_LON env vars."""
-    lat_s = os.getenv("NWS_HOME_LAT")
-    lon_s = os.getenv("NWS_HOME_LON")
-    if not lat_s or not lon_s:
-        raise RuntimeError(
-            "NWS_HOME_LAT and NWS_HOME_LON environment variables must be set. "
-            "Example: export NWS_HOME_LAT=40.7128 NWS_HOME_LON=-74.0060"
-        )
-    return float(lat_s), float(lon_s)
+    """Return (lat, lon) from env vars or profile config."""
+    lat, lon, _name = _load_profile()
+    return lat, lon
 
 
 def _get_grid() -> Dict[str, str]:

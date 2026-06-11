@@ -1,0 +1,15 @@
+{
+  "default": "trenton",
+  "profiles": {
+    "trenton": {
+      "name": "Trenton, NJ",
+      "lat": 40.2085,
+      "lon": -74.7598
+    },
+    "lax": {
+      "name": "Los Angeles, CA",
+      "lat": 33.9416,
+      "lon": -118.4085
+    }
+  }
+}

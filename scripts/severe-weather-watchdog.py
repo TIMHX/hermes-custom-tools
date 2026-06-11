@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Severe weather watchdog for Trenton, NJ.
+"""Severe weather watchdog.
 Queries NWS API. Outputs alert on severe weather; silent otherwise.
+Location is read from NWS_HOME_LAT/LON env vars or ~/.hermes/config/nws_profiles.json.
 Designed for hermes-agent no_agent cron mode."""
 
 import json
@@ -10,7 +11,46 @@ import time
 import urllib.request
 import urllib.error
 
-LAT, LON = float(os.getenv("NWS_HOME_LAT", "0")), float(os.getenv("NWS_HOME_LON", "0"))
+# ── Location (3-level fallback: env vars → NWS_PROFILE → default profile) ──
+_CONFIG_PATH = os.path.expanduser("~/.hermes/config/nws_profiles.json")
+_LOCATION_NAME = "Unknown"
+
+
+def _load_coords() -> tuple[float, float]:
+    """Return (lat, lon), also sets global _LOCATION_NAME."""
+    global _LOCATION_NAME
+
+    # Level 1: Direct env var override
+    lat_s = os.getenv("NWS_HOME_LAT")
+    lon_s = os.getenv("NWS_HOME_LON")
+    if lat_s and lon_s:
+        _LOCATION_NAME = os.getenv("NWS_LOCATION_NAME", "Configured Location")
+        return float(lat_s), float(lon_s)
+
+    # Level 2-3: Profile config
+    try:
+        with open(_CONFIG_PATH) as f:
+            config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print(
+            f"[FATAL] NWS_HOME_LAT/LON not set and {_CONFIG_PATH} not found.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    profile_name = os.getenv("NWS_PROFILE", config.get("default", "trenton"))
+    profiles = config.get("profiles", {})
+    p = profiles.get(profile_name)
+    if not p:
+        available = ", ".join(profiles.keys())
+        print(f"[FATAL] Profile '{profile_name}' not found. Available: {available}", file=sys.stderr)
+        sys.exit(1)
+
+    _LOCATION_NAME = p.get("name", profile_name)
+    return p["lat"], p["lon"]
+
+
+LAT, LON = _load_coords()
 USER_AGENT = "hermes-weather-watchdog/1.0"
 TIMEOUT = 15
 MAX_RETRIES = 2
@@ -138,7 +178,7 @@ def check_forecast() -> str | None:
         return None
 
     # Format output
-    lines = ["⚠️ **恶劣天气提醒 — Trenton NJ**\n"]
+    lines = [f"⚠️ **恶劣天气提醒 — {_LOCATION_NAME}**\n"]
     for bp in bad_periods:
         reasons_str = " · ".join(bp["reasons"])
         lines.append(
