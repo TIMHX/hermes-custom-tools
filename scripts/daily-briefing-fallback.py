@@ -4,10 +4,63 @@ Daily Briefing with model fallback: MiniMax → DeepSeek → Gemini.
 Uses SearXNG (primary) + Tavily (fallback) for news search, writes to Notion.
 """
 
-import os, sys, json, time, re
+import os, sys, json, time, re, subprocess
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
+
+# ─── Secrets: pull from Bitwarden if env vars are empty ──────────
+_NEEDED_SECRETS = [
+    "TAVILY_API_KEY",
+    "MINIMAX_CN_API_KEY",
+    "MINIMAX_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GOOGLE_API_KEY",
+    "NOTION_API_KEY",
+]
+
+def _fetch_secrets_from_bitwarden() -> None:
+    """If any needed API key is missing from env, fetch all from Bitwarden."""
+    missing = [k for k in _NEEDED_SECRETS if not os.environ.get(k)]
+    if not missing:
+        return  # all keys already present
+
+    token = os.environ.get("BWS_ACCESS_TOKEN", "")
+    if not token:
+        print("  [WARN] BWS_ACCESS_TOKEN not set, skipping Bitwarden fetch", file=sys.stderr)
+        return
+
+    bws_bin = os.path.expanduser("~/.hermes/bin/bws")
+    try:
+        result = subprocess.run(
+            [bws_bin, "secret", "list"],
+            capture_output=True, text=True,
+            env={**os.environ, "BWS_ACCESS_TOKEN": token},
+            timeout=15,
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] bws failed (rc={result.returncode}): {result.stderr[:200]}", file=sys.stderr)
+            return
+
+        secrets = json.loads(result.stdout)
+        injected = 0
+        for s in secrets:
+            key = s.get("key", "")
+            if key in missing:
+                os.environ[key] = s["value"]
+                injected += 1
+
+        if injected:
+            print(f"  [bws] Injected {injected}/{len(missing)} missing secrets from Bitwarden", file=sys.stderr)
+        else:
+            print(f"  [WARN] bws returned no matching secrets for: {missing}", file=sys.stderr)
+
+    except FileNotFoundError:
+        print(f"  [WARN] bws binary not found at {bws_bin}", file=sys.stderr)
+    except Exception as e:
+        print(f"  [WARN] Bitwarden fetch failed: {e}", file=sys.stderr)
+
+_fetch_secrets_from_bitwarden()
 
 # ─── API KEYS from env ───────────────────────────────────────────
 TAVILY_KEY = os.environ.get("TAVILY_API_KEY", "")
