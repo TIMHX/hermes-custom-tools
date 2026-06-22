@@ -418,47 +418,86 @@ def _filter_old_results(results: list[dict]) -> list[dict]:
     return filtered
 
 
-def search_all_domains() -> dict:
+# ─── Dedup: Read past briefings ──────────────────────────────────
+def get_recent_stories(days: int = 2):
+    """Read past N days' briefing outputs, extract story titles and URLs for dedup.
+    Returns (titles_set, urls_set)."""
+    import glob as _glob
+    output_dir = os.path.expanduser("~/.hermes/cron/output/2a8c6cdf9082")
+    today = datetime.now(timezone.utc)
+    recent_titles = set()
+    recent_urls = set()
+
+    for i in range(1, days + 1):
+        d = today - timedelta(days=i)
+        date_prefix = d.strftime("%Y-%m-%d")
+        pattern = os.path.join(output_dir, f"{date_prefix}_*.md")
+        files = sorted(_glob.glob(pattern))
+        if not files:
+            continue
+        # Read the last run for that day
+        try:
+            with open(files[-1], "r") as fh:
+                content = fh.read()
+            for line in content.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("• "):
+                    recent_titles.add(stripped[2:].strip())
+                elif stripped.startswith("🔗 "):
+                    recent_urls.add(stripped[2:].strip())
+        except Exception:
+            pass
+
+    print(
+        f"  [dedup] Loaded {len(recent_titles)} titles, {len(recent_urls)} URLs "
+        f"from past {days} days",
+        file=sys.stderr,
+    )
+    return recent_titles, recent_urls
+
+
+def search_all_domains(recent_urls: set = None) -> dict:
     """Search 3 domains, return {domain_name: [results]}."""
     today = datetime.now(timezone.utc)
-    month_abbr = today.strftime("%b")  # "May"
-    day = today.strftime("%-d")        # "20"
     date_compact = today.strftime("%Y-%m-%d")
     yesterday = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-    
+    day_before = (today - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    # Search queries: use specific dates (not month-wide) to reduce stale results.
+    # SearXNG already enforces time_range=week; the date text is a relevance signal.
     domains = {
         "macro": [
-            f"global trade tariffs news {month_abbr} {day} 2026",
+            f"global trade tariffs news {date_compact}",
             f"US economy federal reserve news {date_compact}",
-            f"immigration policy news {month_abbr} 2026",
-            f"geopolitics international relations news today",
+            f"immigration policy news {date_compact}",
+            f"geopolitics international relations news {date_compact}",
             f"financial markets stock market news {date_compact}",
-            f"stock market biggest gainers movers today",
-            f"Wall Street top stories market moving news this week",
-            f"stock sector rotation which sectors outperforming {month_abbr} 2026",
-            f"US stocks rally surge what is driving markets {date_compact}",
+            f"stock market movers news {date_compact}",
+            f"Wall Street top stories market news this week",
+            f"stock sector rotation news {date_compact}",
+            f"US stocks rally surge news {date_compact}",
         ],
         "tech": [
             f"AI artificial intelligence news {date_compact}",
-            f"technology semiconductor chip news {month_abbr} 2026",
-            f"quantum computing breakthrough news {month_abbr} 2026",
-            f"cybersecurity data breach vulnerability news {month_abbr} 2026",
-            f"robotics autonomous drone news {month_abbr} 2026",
-            f"consumer electronics tech product launch news {month_abbr} 2026",
+            f"technology semiconductor chip news {date_compact}",
+            f"quantum computing breakthrough news {date_compact}",
+            f"cybersecurity data breach vulnerability news {date_compact}",
+            f"robotics autonomous drone news {date_compact}",
+            f"consumer electronics tech product launch news {date_compact}",
         ],
         "energy_climate_health": [
-            f"renewable energy news {month_abbr} {day} 2026",
+            f"renewable energy news {date_compact}",
             f"climate change news {date_compact}",
             f"biotechnology medical research news {date_compact}",
-            f"public health epidemiology news {month_abbr} 2026",
-            f"oceanography marine biology discovery news today",
+            f"public health epidemiology news {date_compact}",
+            f"oceanography marine biology discovery news {date_compact}",
         ],
         "science": [
-            f"archaeology discovery paleontology news {month_abbr} 2026",
-            f"astronomy space exploration news today",
-            f"scientific breakthrough research news {month_abbr} 2026",
-            f"physics particle discovery news {month_abbr} 2026",
-            f"neuroscience brain research news {month_abbr} 2026",
+            f"archaeology discovery paleontology news {date_compact}",
+            f"astronomy space exploration news {date_compact}",
+            f"scientific breakthrough research news {date_compact}",
+            f"physics particle discovery news {date_compact}",
+            f"neuroscience brain research news {date_compact}",
         ],
         "finance_cn": [
             f"美股 涨幅 板块 今日 热点",
@@ -476,18 +515,35 @@ def search_all_domains() -> dict:
         "finance_cn": "五、财经热点",
     }
 
+    if recent_urls is None:
+        recent_urls = set()
+    filtered_count = 0
+
     for key, queries in domains.items():
         results = search_news(queries, max_results=8)
+        # Filter out stories whose URLs were already in recent briefings
+        if recent_urls:
+            before = len(results)
+            results = [r for r in results if r.get("url", "") not in recent_urls]
+            filtered_count += before - len(results)
         all_domain_results[key] = {"label": domain_labels[key], "stories": results}
         print(f"  [{key}] Found {len(results)} stories", file=sys.stderr)
         time.sleep(1)
+
+    if filtered_count:
+        print(f"  [dedup] Filtered {filtered_count} duplicate URL(s)", file=sys.stderr)
 
     return all_domain_results
 
 
 # ─── LLM Generation with Fallback ────────────────────────────────
-def generate_briefing(news_data: dict, today_str: str) -> str:
+def generate_briefing(news_data: dict, today_str: str, recent_titles: set = None) -> str:
     """Generate Chinese briefing, trying each LLM in chain."""
+    # Build dedup note for recent stories
+    dedup_note = ""
+    if recent_titles:
+        title_list = "\n".join(f"  ✗ {t}" for t in sorted(recent_titles)[:40])
+        dedup_note = f"""\nSTRICT DEDUP RULE: The following stories were ALREADY covered in recent briefings (past 2 days).\nDO NOT include ANY of them unless there is a genuinely major BREAKING development today:\n{title_list}\n\n"""
     # Build user message with news data
     news_text = ""
     for key in ["macro", "tech", "energy_climate_health", "science", "finance_cn"]:
@@ -498,7 +554,7 @@ def generate_briefing(news_data: dict, today_str: str) -> str:
 
     system_msg = f"""You are a Chinese news briefing editor. Today is {today_str}.
 
-Your task: select the most important stories from the provided news data and write a daily briefing in Chinese.
+{dedup_note}Your task: select the most important stories from the provided news data and write a daily briefing in Chinese.
 
 FORMAT RULES (strict):
 - Output ONLY the briefing, no extra commentary, no code blocks, no markdown wrappers
@@ -723,9 +779,13 @@ def main():
 
     print(f"=== Daily Briefing {today} ===", file=sys.stderr)
 
+    # 0. Load recent stories for dedup
+    print("[0/3] Loading recent briefings for dedup...", file=sys.stderr)
+    recent_titles, recent_urls = get_recent_stories(days=2)
+
     # 1. Search news
     print("[1/3] Searching news...", file=sys.stderr)
-    news = search_all_domains()
+    news = search_all_domains(recent_urls=recent_urls)
 
     total_stories = sum(len(d["stories"]) for d in news.values())
     if total_stories == 0:
@@ -735,7 +795,7 @@ def main():
 
     # 2. Generate briefing with fallback
     print("[2/3] Generating briefing...", file=sys.stderr)
-    briefing = generate_briefing(news, today)
+    briefing = generate_briefing(news, today, recent_titles=recent_titles)
     # Replace date template if model used it
     briefing = briefing.replace("YYYY-MM-DD", today).replace("2026年X月X日", today_cn)
 
