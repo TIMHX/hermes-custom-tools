@@ -1007,10 +1007,11 @@ def fetch_kev() -> list[dict[str, str]]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=KEV_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
     LINUX_KEYWORDS = [
-        "linux", "ubuntu", "debian", "kernel", "apache", "nginx",
-        "openssl", "drupal", "wordpress", "php", "python", "node",
-        "redis", "postgres", "mysql", "kubernetes", "docker",
-        "git", "curl", "openssh", "dns", "npm", "rust", "golang",
+        "linux", "ubuntu", "debian", "kernel",
+        "openssl", "openssh",
+        "docker", "containerd",
+        "python", "node", "npm", "git", "curl",
+        "caddy", "tailscale", "wireguard",
     ]
 
     recent: list[dict[str, str]] = []
@@ -1027,6 +1028,7 @@ def fetch_kev() -> list[dict[str, str]]:
                 "vendor": v.get("vendorProject", "N/A"),
                 "description": v.get("shortDescription", "")[:300],
                 "date_added": v.get("dateAdded", ""),
+                "ransomware": v.get("knownRansomwareCampaignUse", "Unknown"),
             })
 
     return sorted(recent, key=lambda x: x["date_added"], reverse=True)
