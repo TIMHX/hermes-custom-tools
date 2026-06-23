@@ -71,6 +71,10 @@ NOTION_KEY = os.environ.get("NOTION_API_KEY", "")
 NOTION_DB = "34655a349949804fa72bdacdaf1e8080"
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:8888")
 
+# Cron job ID for output directory. Update if the "Daily Briefing" cron job is recreated.
+# Override via: HERMES_DAILY_BRIEFING_JOB_ID=xxx python daily-briefing-fallback.py
+_BRIEFING_JOB_ID = os.environ.get("HERMES_DAILY_BRIEFING_JOB_ID", "2a8c6cdf9082")
+
 # ─── LLM Fallback Chain ──────────────────────────────────────────
 MODEL_USED = None  # set by generate_briefing
 
@@ -157,19 +161,16 @@ LLM_CHAIN = [
         "name": "minimax",
         "prepare": minimax_prepare,
         "extract": minimax_extract_text,
-        "filter_error_patterns": ["output new_sensitive", "1027"],
     },
     {
         "name": "deepseek",
         "prepare": deepseek_prepare,
         "extract": lambda r: r["choices"][0]["message"]["content"],
-        "filter_error_patterns": [],
     },
     {
         "name": "gemini",
         "prepare": gemini_prepare,
         "extract": gemini_extract_text,
-        "filter_error_patterns": [],
     },
 ]
 
@@ -423,7 +424,7 @@ def get_recent_stories(days: int = 2):
     """Read past N days' briefing outputs, extract story titles and URLs for dedup.
     Returns (titles_set, urls_set)."""
     import glob as _glob
-    output_dir = os.path.expanduser("~/.hermes/cron/output/2a8c6cdf9082")
+    output_dir = os.path.join(os.path.expanduser("~/.hermes/cron/output"), _BRIEFING_JOB_ID)
     today = datetime.now(timezone.utc)
     recent_titles = set()
     recent_urls = set()
@@ -627,15 +628,18 @@ Here is the news data to work with:
             resp_text = resp.read().decode()
             resp_json = json.loads(resp_text)
 
-            # Check for content filter in response text
-            resp_str = resp_text.lower()
-            for pattern in llm["filter_error_patterns"]:
-                if pattern.lower() in resp_str:
-                    raise RuntimeError(f"Content filter: {pattern}")
-
             text = llm["extract"](resp_json)
             if not text or len(text.strip()) < 50:
                 raise RuntimeError(f"Empty or too-short response ({len(text)} chars)")
+
+            # Structural validation: a real briefing MUST have section headers
+            # and story entries. Censored/filtered responses cannot produce this
+            # structure — catches provider content filters without brittle keyword
+            # matching against internal error codes.
+            if not re.search(r'##\s+[一二三四五]', text):
+                raise RuntimeError(f"Missing section headers — likely content-filtered")
+            if '• ' not in text:
+                raise RuntimeError(f"Missing story entries — likely content-filtered")
 
             MODEL_USED = name
             print(f"  ✓ {name} succeeded ({len(text)} chars)", file=sys.stderr)
