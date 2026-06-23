@@ -1818,8 +1818,9 @@ def main() -> None:
     # Beryl AX
     infrastructure["beryl_ax"] = _safe_check("beryl_ax", check_beryl_ax)
 
-    # SearXNG engines (infrastructure view)
-    infrastructure["searxng_engines"] = _safe_check("searxng_engines", check_searxng_engines)
+    # SearXNG engines — call once, shared by infrastructure + applications
+    searxng_engines_result = _safe_check("searxng_engines", check_searxng_engines)
+    infrastructure["searxng_engines"] = searxng_engines_result
 
     # Beryl AX ↔ SearXNG IP cross-validation
     infrastructure["beryl_ip_mismatch"] = _safe_check("beryl_ip_mismatch", check_beryl_ip_mismatch)
@@ -1887,7 +1888,7 @@ def main() -> None:
     applications["socket_scan"] = _safe_check("socket_scan", check_socket_scan, npm_cache)
     applications["searxng"] = {
         "health": _safe_check("searxng_health", check_searxng_health),
-        "engines": _safe_check("searxng_engines_app", check_searxng_engines),
+        "engines": searxng_engines_result,
         "update": _safe_check("searxng_update", check_searxng_update),
     }
     applications["gitnexus"] = {
