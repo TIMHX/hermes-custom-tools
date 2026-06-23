@@ -52,18 +52,12 @@ BERYL_PORT = 1080
 WIN_HOST = "tim-pc"
 SSH_TIMEOUT_OPTS = "-o ConnectTimeout=5 -o BatchMode=yes"
 
-KNOWN_MITIGATIONS: dict[str, dict[str, Any]] = {
-    "/etc/modprobe.d/disable-algif_aead.conf": {
-        "cve": "CVE-2026-31431",
-        "name": "Copy Fail",
-        "module": "algif_aead",
-    },
-    "/etc/modprobe.d/dirty-frag.conf": {
-        "cve": "CVE-2026-43284 / CVE-2026-43500",
-        "name": "Dirty Frag",
-        "modules": ["esp4", "esp6", "rxrpc"],
-    },
-}
+# KNOWN_MITIGATIONS: temporary workarounds for CVEs awaiting upstream kernel fixes.
+# Add entries when a CVE needs mitigation (modprobe.d blacklist).
+# Periodically check Ubuntu CVE tracker. When upstream fix is confirmed in the
+# running kernel, remove the entry AND delete the modprobe.d file.
+# Empty list = all mitigated CVEs have been patched upstream.
+KNOWN_MITIGATIONS: dict[str, dict[str, Any]] = {}
 
 # ═══════════════════════════════════════════
 # Helpers
@@ -1101,7 +1095,16 @@ def check_kernel_updates() -> dict[str, Any]:
 
 
 def check_mitigations() -> dict[str, dict[str, Any]]:
-    """Check known security mitigation configs and module loading."""
+    """Check known mitigation configs against loaded kernel modules.
+
+    KNOWN_MITIGATIONS is a living list: add entries for CVEs that need temporary
+    workarounds. Each daily report checks if mitigation files exist and modules
+    are blocked. When upstream fix is confirmed (check ubuntu.com/security/CVE-*),
+    remove the entry from the list and delete the modprobe.d file.
+    Empty dict = nothing to report, zero overhead.
+    """
+    if not KNOWN_MITIGATIONS:
+        return {}
     results: dict[str, dict[str, Any]] = {}
     for conf_path, info in KNOWN_MITIGATIONS.items():
         exists = os.path.isfile(conf_path)
