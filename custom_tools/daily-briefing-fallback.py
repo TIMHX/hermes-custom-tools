@@ -2,12 +2,16 @@
 """
 Daily Briefing with model fallback: MiniMax → DeepSeek → Gemini.
 Uses SearXNG (primary) + Tavily (fallback) for news search, writes to Notion.
+Also fetches Hacker News top stories via hn_top module.
 """
 
 import os, sys, json, time, re, subprocess
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
+
+# Ensure local modules (hn_top) can be imported
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ─── Secrets: pull from Bitwarden if env vars are empty ──────────
 _NEEDED_SECRETS = [
@@ -547,7 +551,7 @@ def generate_briefing(news_data: dict, today_str: str, recent_titles: set = None
         dedup_note = f"""\nSTRICT DEDUP RULE: The following stories were ALREADY covered in recent briefings (past 2 days).\nDO NOT include ANY of them unless there is a genuinely major BREAKING development today:\n{title_list}\n\n"""
     # Build user message with news data
     news_text = ""
-    for key in ["macro", "tech", "energy_climate_health", "science", "finance_cn"]:
+    for key in ["macro", "tech", "energy_climate_health", "science", "finance_cn", "hn"]:
         domain = news_data.get(key, {})
         news_text += f"\n## {domain.get('label', key)}\n"
         for i, story in enumerate(domain.get("stories", []), 1):
@@ -610,6 +614,12 @@ Daily Briefing -- {today_str}
 • ...
   ...
   🔗 ...
+
+## 六、Hacker News 头条
+
+• ...
+  ...
+  🔗 ...
 ```
 
 Here is the news data to work with:
@@ -636,7 +646,7 @@ Here is the news data to work with:
             # and story entries. Censored/filtered responses cannot produce this
             # structure — catches provider content filters without brittle keyword
             # matching against internal error codes.
-            if not re.search(r'##\s+[一二三四五]', text):
+            if not re.search(r'##\s+[一二三四五六]', text):
                 raise RuntimeError(f"Missing section headers — likely content-filtered")
             if '• ' not in text:
                 raise RuntimeError(f"Missing story entries — likely content-filtered")
@@ -788,7 +798,7 @@ def main():
     recent_titles, recent_urls = get_recent_stories(days=2)
 
     # 1. Search news
-    print("[1/3] Searching news...", file=sys.stderr)
+    print("[1/4] Searching news...", file=sys.stderr)
     news = search_all_domains(recent_urls=recent_urls)
 
     total_stories = sum(len(d["stories"]) for d in news.values())
@@ -797,14 +807,33 @@ def main():
         sys.exit(0)
     print(f"  Total: {total_stories} stories", file=sys.stderr)
 
+    # 1.5 Fetch Hacker News
+    print("[1.5/4] Fetching Hacker News...", file=sys.stderr)
+    try:
+        from hn_top import fetch_hackernews
+        hn_raw = fetch_hackernews(min_score=50, max_items=30)
+        hn_stories = []
+        for s in hn_raw:
+            hn_stories.append({
+                "title": s["title"],
+                "url": s["url"],
+                "snippet": f"{s['score']} points, {s['comments_count']} comments — by {s['author']}",
+                "published_date": s["posted_at"],
+            })
+        news["hn"] = {"label": "六、Hacker News 头条", "stories": hn_stories}
+        print(f"  [HN] {len(hn_stories)} stories added", file=sys.stderr)
+    except Exception as e:
+        print(f"  [WARN] HN fetch failed: {e}", file=sys.stderr)
+        news["hn"] = {"label": "六、Hacker News 头条", "stories": []}
+
     # 2. Generate briefing with fallback
-    print("[2/3] Generating briefing...", file=sys.stderr)
+    print("[2/4] Generating briefing...", file=sys.stderr)
     briefing = generate_briefing(news, today, recent_titles=recent_titles)
     # Replace date template if model used it
     briefing = briefing.replace("YYYY-MM-DD", today).replace("2026年X月X日", today_cn)
 
     # 3. Write to Notion
-    print("[3/3] Writing to Notion...", file=sys.stderr)
+    print("[3/4] Writing to Notion...", file=sys.stderr)
     try:
         page_id = write_to_notion(briefing, today)
     except Exception as e:
