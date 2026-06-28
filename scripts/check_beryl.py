@@ -342,4 +342,62 @@ def check_beryl_ax() -> dict[str, Any]:
     result["tailscale_online"] = bool(ts_line.strip())
     result["offers_exit_node"] = "offers exit node" in ts_line
 
+    # ---- 13j. TS ip-rule watchdog ----
+    rc_wd, wd_out, _ = _ssh_beryl(
+        "echo 'SCRIPT_EXISTS='$(test -x /root/ts-iprule-watchdog.sh && echo yes || echo no); "
+        "echo 'IN_CRONTAB='$(crontab -l 2>/dev/null | grep -c ts-iprule-watchdog || echo 0); "
+        "echo 'CRON_RUNNING='$(ps | grep -c '[c]rond' || echo 0); "
+        "echo 'IPRULE_PRESENT='$(ip rule show 2>/dev/null | grep -c 'from 100.100.114.49 lookup 52' || echo 0); "
+        "echo 'STATUS='$(cat /tmp/ts-watchdog.status 2>/dev/null || echo 'missing'); "
+        "echo 'FIXES='$(cat /tmp/ts-watchdog.fixes 2>/dev/null || echo 0); "
+        "echo 'LASTLOG='$(tail -3 /tmp/ts-watchdog.log 2>/dev/null || echo '')",
+        timeout=10,
+    )
+    wd = {
+        "script_exists": False,
+        "in_crontab": False,
+        "cron_running": False,
+        "iprule_present": False,
+        "status_file": None,
+        "fixes": 0,
+        "last_fix_log": None,
+    }
+    for line in wd_out.split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            if k == "SCRIPT_EXISTS":
+                wd["script_exists"] = v.strip() == "yes"
+            elif k == "IN_CRONTAB":
+                try:
+                    wd["in_crontab"] = int(v) > 0
+                except ValueError:
+                    pass
+            elif k == "CRON_RUNNING":
+                try:
+                    wd["cron_running"] = int(v) > 0
+                except ValueError:
+                    pass
+            elif k == "IPRULE_PRESENT":
+                try:
+                    wd["iprule_present"] = int(v) > 0
+                except ValueError:
+                    pass
+            elif k == "STATUS":
+                wd["status_file"] = v.strip()
+            elif k == "FIXES":
+                try:
+                    wd["fixes"] = int(v)
+                except ValueError:
+                    pass
+            elif k == "LASTLOG":
+                val = v.strip()
+                if val:
+                    wd["last_fix_log"] = val
+    wd["healthy"] = (
+        wd["script_exists"] and wd["in_crontab"] and
+        wd["cron_running"] and wd["iprule_present"] and
+        (wd["status_file"] or "").startswith("ok")
+    )
+    result["ts_watchdog"] = wd
+
     return result
