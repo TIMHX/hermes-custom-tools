@@ -47,7 +47,7 @@ SOCKET_TOKEN_FILE = "/home/xing/.hermes/.socket-token"
 BWS_BIN = "/home/xing/.hermes/bin/bws"
 
 BERYL_HOST = "gl-mt3000"
-BERYL_IP_FALLBACK = "100.100.114.49"
+BERYL_IP_FALLBACK = "100.92.132.104"
 BERYL_PORT = 1080
 WIN_HOST = "tim-pc"
 SSH_TIMEOUT_OPTS = "-o ConnectTimeout=5 -o BatchMode=yes"
@@ -1781,6 +1781,22 @@ def check_local_bin() -> dict[str, Any]:
     }
 
 
+def check_tailscale_api_token() -> dict[str, Any]:
+    """Check Tailscale API token expiry (90-day cycle, stored in Bitwarden).
+    Returns expiry status and days remaining. Warns at 7/3/1 days before expiry."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_tailscale_token.py")
+    try:
+        result = subprocess.run(
+            [sys.executable, script],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        return {"error": f"exit {result.returncode}", "stderr": result.stderr[:200]}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ═══════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════
@@ -1903,6 +1919,7 @@ def main() -> None:
     applications["context7"] = _safe_check("context7", check_context7)
     applications["bitwarden_sm"] = _safe_check("bitwarden_sm", check_bitwarden_sm)
     applications["local_bin"] = _safe_check("local_bin", check_local_bin)
+    applications["tailscale_api_token"] = _safe_check("tailscale_api_token", check_tailscale_api_token)
 
     # ═══ Output ═══
     report = {

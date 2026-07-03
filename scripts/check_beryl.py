@@ -20,7 +20,7 @@ from typing import Any
 # ═══════════════════════════════════════════
 
 BERYL_HOST = "gl-mt3000"
-BERYL_IP_FALLBACK = "100.100.114.49"
+BERYL_IP_FALLBACK = "100.92.132.104"
 BERYL_PORT = 1080
 CMD_TIMEOUT = 30
 SSH_TIMEOUT_OPTS = "-o ConnectTimeout=5 -o BatchMode=yes"
@@ -324,7 +324,7 @@ def check_beryl_ax() -> dict[str, Any]:
 
     # ---- 13h. Service integrity ----
     rc_svc, svc_out, _ = _ssh_beryl(
-        "for svc in tor vsftpd minidlna zerotier smstools3 usbmuxd; do "
+        "for svc in tor vsftpd minidlna zerotier smstools3 usbmuxd adguardhome samba4 openvpn; do "
         "/etc/init.d/$svc enabled 2>/dev/null && echo \"ENABLED:$svc\" || echo \"disabled:$svc\"; done",
         timeout=10,
     )
@@ -332,6 +332,27 @@ def check_beryl_ax() -> dict[str, Any]:
     result["services"] = {
         "re_enabled": re_enabled,
         "all_disabled": len(re_enabled) == 0,
+    }
+
+    # ---- 13h2. OP24 baseline: OpenSSL, kernel, firewall integrity ----
+    rc_op24, op24_out, _ = _ssh_beryl(
+        "echo \"OPENSSL=$(openssl version 2>/dev/null | awk '{print $2}')\"; "
+        "echo \"KERNEL_FULL=$(uname -r)\"; "
+        "echo \"OPENWRT_REL=$(grep DISTRIB_RELEASE /etc/openwrt_release 2>/dev/null | cut -d' -f2)\"; "
+        "echo \"TS_LAN_FW=$(nft list chain inet fw4 forward_tailscale0 2>/dev/null | grep -c 'br-lan')\"",
+        timeout=10,
+    )
+    op24_info = {}
+    for line in op24_out.split("\n"):
+        if "=" in line:
+            k, v = line.split("=", 1)
+            op24_info[k.strip()] = v.strip()
+    result["op24_baseline"] = {
+        "openssl_version": op24_info.get("OPENSSL", "?"),
+        "kernel_full": op24_info.get("KERNEL_FULL", "?"),
+        "kernel_6x": (op24_info.get("KERNEL_FULL", "") or "").startswith("6."),
+        "openwrt_release": op24_info.get("OPENWRT_REL", "?"),
+        "ts_lan_fw_rule": int(op24_info.get("TS_LAN_FW", "0") or "0") > 0,
     }
 
     # ---- 13i. Tailscale online status (from VPS perspective) ----
@@ -347,7 +368,7 @@ def check_beryl_ax() -> dict[str, Any]:
         "echo 'SCRIPT_EXISTS='$(test -x /root/ts-iprule-watchdog.sh && echo yes || echo no); "
         "echo 'IN_CRONTAB='$(crontab -l 2>/dev/null | grep -c ts-iprule-watchdog || echo 0); "
         "echo 'CRON_RUNNING='$(ps | grep -c '[c]rond' || echo 0); "
-        "echo 'IPRULE_PRESENT='$(ip rule show 2>/dev/null | grep -c 'from 100.100.114.49 lookup 52' || echo 0); "
+        "echo 'IPRULE_PRESENT='$(ip rule show 2>/dev/null | grep -c 'from 100.92.132.104 lookup 52' || echo 0); "
         "echo 'STATUS='$(cat /tmp/ts-watchdog.status 2>/dev/null || echo 'missing'); "
         "echo 'FIXES='$(cat /tmp/ts-watchdog.fixes 2>/dev/null || echo 0); "
         "echo 'LASTLOG='$(tail -3 /tmp/ts-watchdog.log 2>/dev/null || echo '')",
