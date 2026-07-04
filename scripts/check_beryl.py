@@ -237,6 +237,114 @@ def check_beryl_ax() -> dict[str, Any]:
         "upgradable": opkg_upgradable[:10],
     }
 
+    # ---- 13c2. opkg security classification ----
+    # Categorize upgradable packages by risk level and whether the
+    # corresponding service is running or disabled.
+    _SECURITY_CRITICAL = {
+        # Patterns that match security-critical package names
+        "libopenssl", "openssl-util", "curl", "libcurl", "ca-bundle", "ca-certificates",
+        "libexpat", "libsqlite", "dnsmasq", "bind-libs", "dbus", "libdbus",
+        "dropbear", "nginx", "wpad", "hostapd", "firewall",
+    }
+    _DISABLED_SERVICES = {
+        # Service names whose packages are irrelevant (service disabled)
+        "tor", "openvpn", "zerotier", "vsftpd", "minidlna", "smstools3",
+        "usbmuxd", "adguardhome", "avahi", "dnscrypt-proxy", "samba4",
+        "odhcpd", "gl-black_white", "gl-portal", "gl-tertf", "gl_ipv6",
+        "kmwan", "mpflow", "mpifd", "mptun", "carrier-monitor", "edgerouter",
+        "gl-cloud", "gl_s2s", "gl_dns", "gl_dpi", "netifyd", "gl_eqos",
+        "gl_clients", "gl_fan", "gl_cellular", "gl_tethering",
+        "gl_nas", "disk_manage", "modem_signal", "sms_manager", "plugins",
+        "parental_control", "port_forward", "radius", "repeater", "sip_alg",
+        "usbmode", "vpn-client", "webdav", "openssl(init)",
+    }
+    # Build all upgradable names for the full-list SSH call
+    # (opkg list-upgradable returns all, we just use head -10 for compactness)
+    _rc_full, _full_out, _ = _ssh_beryl(
+        "opkg list-upgradable 2>/dev/null | awk '{print $1}' | sort",
+        timeout=15,
+    )
+    all_upgradable_names = [l.strip() for l in _full_out.split("\n") if l.strip()]
+
+    security_critical: list[dict] = []
+    security_upgrades: list[dict] = []
+    disabled_svc_pkgs: list[dict] = []
+    other_upgrades: list[dict] = []
+
+    for pkg in opkg_upgradable + [
+        {"name": n, "old_version": "?", "new_version": "?"}
+        for n in all_upgradable_names[len(opkg_upgradable):]
+    ]:
+        name = pkg["name"]
+        # Check security-critical
+        is_critical = any(name.startswith(pat) for pat in _SECURITY_CRITICAL)
+        # Check disabled-service
+        is_disabled_svc = any(
+            name.startswith(pat) or pat in name
+            for pat in _DISABLED_SERVICES
+        )
+        entry = {
+            "name": name,
+            "old_version": pkg.get("old_version", "?"),
+            "new_version": pkg.get("new_version", "?"),
+        }
+        if is_critical:
+            security_critical.append(entry)
+        elif is_disabled_svc:
+            disabled_svc_pkgs.append(entry)
+        elif any(name.startswith(p) for p in ("luci", "lua", "lib", "bind-", "zoneinfo", "wireless", "ip-", "tc-", "libudev", "procd", "usb", "unzip", "iperf", "sqlite", "ffmpeg", "nginx", "openssl")):
+            # Libraries, LuCI, system tools — may affect running services
+            security_upgrades.append(entry)
+        else:
+            other_upgrades.append(entry)
+
+    result["opkg_security"] = {
+        "security_critical_count": len(security_critical),
+        "security_critical": security_critical,
+        "security_upgrade_count": len(security_upgrades),
+        "security_upgrades": security_upgrades[:5],
+        "disabled_svc_count": len(disabled_svc_pkgs),
+        "disabled_svc": disabled_svc_pkgs[:5],
+        "other_count": len(other_upgrades),
+    }
+
+    # ---- 13c3. System performance thresholds ----
+    perf_warnings: list[str] = []
+    # Parse memory percentage
+    mem_str = result.get("memory", "")
+    mem_match = re.search(r'\(([\d.]+)%\)', mem_str)
+    mem_pct = float(mem_match.group(1)) if mem_match else 0.0
+    if mem_pct > 80:
+        perf_warnings.append(f"memory {mem_pct:.0f}% (threshold 80%)")
+
+    # Parse disk percentage
+    disk_str = result.get("disk", "")
+    disk_match = re.search(r'\((\d+)%\)', disk_str)
+    disk_pct = int(disk_match.group(1)) if disk_match else 0
+    if disk_pct > 80:
+        perf_warnings.append(f"disk {disk_pct}% (threshold 80%)")
+
+    # Parse load
+    load_str = result.get("load", "0,0,0")
+    try:
+        loads = [float(x) for x in load_str.split(",")]
+        if len(loads) >= 3 and loads[2] > 2.0:
+            perf_warnings.append(f"load_15min {loads[2]:.1f} (threshold 2.0)")
+    except (ValueError, IndexError):
+        pass
+
+    # Service count deviation from baseline
+    svc_count = result.get("enabled_service_count")
+    if svc_count is not None and svc_count != 51:
+        perf_warnings.append(f"service_count {svc_count} (baseline 51)")
+
+    result["performance"] = {
+        "memory_pct": mem_pct,
+        "disk_pct": disk_pct,
+        "warnings": perf_warnings,
+        "ok": len(perf_warnings) == 0,
+    }
+
     # ---- 13d. Tailscale config ----
     rc_ts, ts_conf, _ = _ssh_beryl(
         "echo \"LAN=$(cat /etc/config/tailscale 2>/dev/null | grep -c 'lan_enabled.*1')\"; "
@@ -323,8 +431,18 @@ def check_beryl_ax() -> dict[str, Any]:
     result["dns_leak"] = {"dns_on_tailscale_ip": dns_on_tailscale}
 
     # ---- 13h. Service integrity ----
+    # Monitored services — these were previously disabled and should stay dead.
+    # Baseline: 51 services (2026-07-03; 104→51, 53 disabled).
+    # Excluded from monitor (allowed to run): carrier-monitor, gl_timer.
     rc_svc, svc_out, _ = _ssh_beryl(
-        "for svc in tor vsftpd minidlna zerotier smstools3 usbmuxd adguardhome samba4 openvpn; do "
+        "for svc in tor vsftpd minidlna zerotier smstools3 usbmuxd adguardhome samba4 openvpn "
+        "gl-black_white_list gl-portal gl-tertf gl_ipv6 kmwan mpflow mpifd mptun "
+        "edgerouter init_new_provider.sh gl-cloud gl_ddns gl_s2s "
+        "gl_dns gl_dpi gl_dpi_flow_statistics netifyd gl_eqos sqm gl_clients gl_fan "
+        "gl_cellular_manager gl_tethering gl_nas_diskmanager gl_nas_sys "
+        "gl_nas_sys_dl gl_nas_sys_up disk_manage modem_signal sms_manager plugins "
+        "parental_control avahi-daemon port_forward radius repeater sip_alg sudo "
+        "usbmode vpn-client webdav_ser dnscrypt-proxy dnsproxy openssl; do "
         "/etc/init.d/$svc enabled 2>/dev/null && echo \"ENABLED:$svc\" || echo \"disabled:$svc\"; done",
         timeout=10,
     )
@@ -335,24 +453,43 @@ def check_beryl_ax() -> dict[str, Any]:
     }
 
     # ---- 13h2. OP24 baseline: OpenSSL, kernel, firewall integrity ----
-    rc_op24, op24_out, _ = _ssh_beryl(
-        "echo \"OPENSSL=$(openssl version 2>/dev/null | awk '{print $2}')\"; "
-        "echo \"KERNEL_FULL=$(uname -r)\"; "
-        "echo \"OPENWRT_REL=$(grep DISTRIB_RELEASE /etc/openwrt_release 2>/dev/null | cut -d' -f2)\"; "
-        "echo \"TS_LAN_FW=$(nft list chain inet fw4 forward_tailscale0 2>/dev/null | grep -c 'br-lan')\"",
+    # Four separate SSH calls to avoid quote-nesting hell in BusyBox ash.
+    openssl_ver = ""
+    kernel_ver = ""
+    openwrt_rel = ""
+    ts_lan_fw = 0
+
+    rc1, out1, _ = _ssh_beryl("openssl version 2>/dev/null | awk '{print $2}'", timeout=10)
+    if rc1 == 0 and out1:
+        openssl_ver = out1.strip()
+
+    rc2, out2, _ = _ssh_beryl("uname -r", timeout=10)
+    if rc2 == 0 and out2:
+        kernel_ver = out2.strip()
+
+    rc3, out3, _ = _ssh_beryl(
+        "grep DISTRIB_RELEASE /etc/openwrt_release 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'",
         timeout=10,
     )
-    op24_info = {}
-    for line in op24_out.split("\n"):
-        if "=" in line:
-            k, v = line.split("=", 1)
-            op24_info[k.strip()] = v.strip()
+    if rc3 == 0 and out3:
+        openwrt_rel = out3.strip()
+
+    rc4, out4, _ = _ssh_beryl(
+        "nft list chain inet fw4 forward_tailscale0 2>/dev/null | grep -c br-lan || echo 0",
+        timeout=10,
+    )
+    if rc4 == 0 and out4:
+        try:
+            ts_lan_fw = int(out4.strip())
+        except ValueError:
+            pass
+
     result["op24_baseline"] = {
-        "openssl_version": op24_info.get("OPENSSL", "?"),
-        "kernel_full": op24_info.get("KERNEL_FULL", "?"),
-        "kernel_6x": (op24_info.get("KERNEL_FULL", "") or "").startswith("6."),
-        "openwrt_release": op24_info.get("OPENWRT_REL", "?"),
-        "ts_lan_fw_rule": int(op24_info.get("TS_LAN_FW", "0") or "0") > 0,
+        "openssl_version": openssl_ver or "?",
+        "kernel_full": kernel_ver or "?",
+        "kernel_6x": kernel_ver.startswith("6."),
+        "openwrt_release": openwrt_rel or "?",
+        "ts_lan_fw_rule": ts_lan_fw > 0,
     }
 
     # ---- 13i. Tailscale online status (from VPS perspective) ----

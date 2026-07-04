@@ -822,6 +822,70 @@ def check_exit_node(ts_status: str) -> dict[str, Any]:
     }
 
 
+def check_main_router() -> dict[str, Any]:
+    """Check if the main router (Optimum gateway at 192.168.0.1) is reachable from Beryl AX.
+
+    This detects ISP upstream outages — when the Optimum modem loses signal,
+    Beryl AX still broadcasts WiFi and maintains Tailscale connections, but
+    has no internet (WAN DHCP still valid, just no upstream route).
+
+    Diagnostics:
+    - gateway_reachable: can Beryl AX ping 192.168.0.1?
+    - internet_reachable: can Beryl AX ping 8.8.8.8?
+    - beryl_ssh_ok: was SSH to Beryl AX successful?
+    - wan_ip / wan_dns: Beryl AX WAN interface state
+
+    When beryl_ssh_ok is False, the LLM should cross-reference with
+    beryl_ax.reachable and tailscale status to disambiguate:
+      Beryl in Tailscale + SSH dead → Beryl TCP issue (not ISP)
+      Beryl in Tailscale + SSH ok + gateway dead → ISP upstream outage
+    """
+    gateway_reachable = False
+    internet_reachable = False
+    beryl_ssh_ok = False
+    wan_ip = None
+    wan_dns = None
+    error = None
+
+    rc, gw_out, gw_err = _ssh_beryl(
+        "ping -c 2 -W 3 192.168.0.1 2>&1 | tail -3",
+        timeout=15,
+    )
+    if rc == 0:
+        beryl_ssh_ok = True
+        gateway_reachable = "0% packet loss" in gw_out
+
+        rc2, inet_out, _ = _ssh_beryl(
+            "ping -c 2 -W 3 8.8.8.8 2>&1 | tail -3",
+            timeout=15,
+        )
+        internet_reachable = "0% packet loss" in inet_out
+
+        rc3, wan_out, _ = _ssh_beryl(
+            "ip -4 addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' && "
+            "cat /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null | awk '/nameserver/{print $2}' | head -1",
+            timeout=10,
+        )
+        if rc3 == 0 and wan_out:
+            lines = wan_out.strip().split("\n")
+            if lines:
+                wan_ip = lines[0].strip()
+            if len(lines) > 1:
+                wan_dns = lines[1].strip()
+    else:
+        error = f"SSH failed (rc={rc})"
+
+    return {
+        "gateway_ip": "192.168.0.1",
+        "gateway_reachable": gateway_reachable,
+        "internet_reachable": internet_reachable,
+        "beryl_ssh_ok": beryl_ssh_ok,
+        "wan_ip": wan_ip,
+        "wan_dns": wan_dns,
+        "error": error,
+    }
+
+
 def check_vpn_summary(derp_ok: bool, beryl_exit: bool, mother_online: bool) -> dict[str, Any]:
     """VPN chain summary."""
     chain_ok = derp_ok and beryl_exit
@@ -1838,6 +1902,9 @@ def main() -> None:
 
     # Beryl AX
     infrastructure["beryl_ax"] = _safe_check("beryl_ax", check_beryl_ax)
+
+    # Main router (Optimum upstream — runs through Beryl AX SSH)
+    infrastructure["main_router"] = _safe_check("main_router", check_main_router)
 
     # SearXNG engines — call once, shared by infrastructure + applications
     searxng_engines_result = _safe_check("searxng_engines", check_searxng_engines)

@@ -20,7 +20,7 @@ from typing import Any
 # ═══════════════════════════════════════════
 
 BERYL_HOST = "gl-mt3000"
-BERYL_IP_FALLBACK = "100.100.114.49"
+BERYL_IP_FALLBACK = "100.92.132.104"
 BERYL_PORT = 1080
 CMD_TIMEOUT = 30
 SSH_TIMEOUT_OPTS = "-o ConnectTimeout=5 -o BatchMode=yes"
@@ -324,7 +324,7 @@ def check_beryl_ax() -> dict[str, Any]:
 
     # ---- 13h. Service integrity ----
     rc_svc, svc_out, _ = _ssh_beryl(
-        "for svc in tor vsftpd minidlna zerotier smstools3 usbmuxd; do "
+        "for svc in tor vsftpd minidlna zerotier smstools3 usbmuxd adguardhome samba4 openvpn; do "
         "/etc/init.d/$svc enabled 2>/dev/null && echo \"ENABLED:$svc\" || echo \"disabled:$svc\"; done",
         timeout=10,
     )
@@ -332,6 +332,46 @@ def check_beryl_ax() -> dict[str, Any]:
     result["services"] = {
         "re_enabled": re_enabled,
         "all_disabled": len(re_enabled) == 0,
+    }
+
+    # ---- 13h2. OP24 baseline: OpenSSL, kernel, firewall integrity ----
+    # Four separate SSH calls to avoid quote-nesting hell in BusyBox ash.
+    openssl_ver = ""
+    kernel_ver = ""
+    openwrt_rel = ""
+    ts_lan_fw = 0
+
+    rc1, out1, _ = _ssh_beryl("openssl version 2>/dev/null | awk '{print $2}'", timeout=10)
+    if rc1 == 0 and out1:
+        openssl_ver = out1.strip()
+
+    rc2, out2, _ = _ssh_beryl("uname -r", timeout=10)
+    if rc2 == 0 and out2:
+        kernel_ver = out2.strip()
+
+    rc3, out3, _ = _ssh_beryl(
+        "grep DISTRIB_RELEASE /etc/openwrt_release 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+'",
+        timeout=10,
+    )
+    if rc3 == 0 and out3:
+        openwrt_rel = out3.strip()
+
+    rc4, out4, _ = _ssh_beryl(
+        "nft list chain inet fw4 forward_tailscale0 2>/dev/null | grep -c br-lan || echo 0",
+        timeout=10,
+    )
+    if rc4 == 0 and out4:
+        try:
+            ts_lan_fw = int(out4.strip())
+        except ValueError:
+            pass
+
+    result["op24_baseline"] = {
+        "openssl_version": openssl_ver or "?",
+        "kernel_full": kernel_ver or "?",
+        "kernel_6x": kernel_ver.startswith("6."),
+        "openwrt_release": openwrt_rel or "?",
+        "ts_lan_fw_rule": ts_lan_fw > 0,
     }
 
     # ---- 13i. Tailscale online status (from VPS perspective) ----
@@ -347,7 +387,7 @@ def check_beryl_ax() -> dict[str, Any]:
         "echo 'SCRIPT_EXISTS='$(test -x /root/ts-iprule-watchdog.sh && echo yes || echo no); "
         "echo 'IN_CRONTAB='$(crontab -l 2>/dev/null | grep -c ts-iprule-watchdog || echo 0); "
         "echo 'CRON_RUNNING='$(ps | grep -c '[c]rond' || echo 0); "
-        "echo 'IPRULE_PRESENT='$(ip rule show 2>/dev/null | grep -c 'from 100.100.114.49 lookup 52' || echo 0); "
+        "echo 'IPRULE_PRESENT='$(ip rule show 2>/dev/null | grep -c 'from 100.92.132.104 lookup 52' || echo 0); "
         "echo 'STATUS='$(cat /tmp/ts-watchdog.status 2>/dev/null || echo 'missing'); "
         "echo 'FIXES='$(cat /tmp/ts-watchdog.fixes 2>/dev/null || echo 0); "
         "echo 'LASTLOG='$(tail -3 /tmp/ts-watchdog.log 2>/dev/null || echo '')",
