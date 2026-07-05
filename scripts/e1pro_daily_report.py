@@ -12,6 +12,23 @@ IMAGE_EXTS = ('.jpg', '.jpeg', '.jfif', '.png', '.gif', '.bmp', '.webp')
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+def cleanup_old_images(days=7):
+    """Remove snapshot images older than `days` days from OUTPUT_DIR."""
+    now = datetime.now()
+    removed = 0
+    for fname in os.listdir(OUTPUT_DIR):
+        fpath = os.path.join(OUTPUT_DIR, fname)
+        if not os.path.isfile(fpath):
+            continue
+        if not fname.lower().endswith(IMAGE_EXTS):
+            continue
+        mtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+        if (now - mtime).days > days:
+            os.remove(fpath)
+            removed += 1
+    if removed:
+        print(f"🧹 Weekly cleanup: removed {removed} old snapshot(s) from ftp_uploads")
+
 def himalaya_json(args):
     result = subprocess.run(
         [HIMALAYA] + args + ['--output', 'json'],
@@ -76,6 +93,9 @@ def main():
 
     if not camera_msgs:
         print(f"{today}: No E1 Pro alerts today")
+        # Weekly cleanup on Sundays (even if no alerts)
+        if datetime.now(ZoneInfo('America/New_York')).weekday() == 6:
+            cleanup_old_images()
         return
 
     print(f"📷 E1 Pro Daily Report — {today}")
@@ -101,6 +121,10 @@ def main():
     print(f"\nAll alerts today:")
     for m in camera_msgs:
         print(f"  {m.get('date', '?')[:19]} — {m.get('subject', '?')[:80]}")
+
+    # Weekly cleanup on Sundays (after report, so today's snapshots are safe)
+    if datetime.now(ZoneInfo('America/New_York')).weekday() == 6:
+        cleanup_old_images()
 
 if __name__ == '__main__':
     main()
