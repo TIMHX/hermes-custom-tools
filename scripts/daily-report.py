@@ -86,6 +86,46 @@ def run_cmd(cmd, timeout=CMD_TIMEOUT, cwd=None, shell=False, env=None, input_tex
         return -3, "", str(e)
 
 
+def _resolve_nvm_bin() -> str | None:
+    """Resolve the nvm bin directory for the current default Node version.
+
+    Reads ~/.nvm/alias/default, then globs for the bin directory.
+    Falls back to globbing all node versions if alias is missing.
+    Returns the bin path (e.g. /home/xing/.nvm/versions/node/v24.18.0/bin) or None.
+    """
+    nvm_dir = os.path.expanduser("~/.nvm")
+    alias_file = os.path.join(nvm_dir, "alias", "default")
+    version = None
+    try:
+        with open(alias_file) as f:
+            version = f.read().strip()
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    if version:
+        bin_dir = os.path.join(nvm_dir, "versions", "node", version, "bin")
+        if os.path.isdir(bin_dir):
+            return bin_dir
+
+    # Fallback: glob all node versions
+    pattern = os.path.join(nvm_dir, "versions", "node", "*", "bin")
+    matches = sorted(glob.glob(pattern), reverse=True)
+    return matches[0] if matches else None
+
+
+def _nvm_env() -> dict[str, str] | None:
+    """Build an env dict with nvm bin directory prepended to PATH.
+
+    Returns None if nvm bin cannot be resolved (caller should fall back to os.environ).
+    """
+    nvm_bin = _resolve_nvm_bin()
+    if not nvm_bin:
+        return None
+    env = os.environ.copy()
+    env["PATH"] = nvm_bin + ":" + env.get("PATH", "")
+    return env
+
+
 def _parse_version(v: str) -> tuple[int, ...]:
     """Extract numeric version components for comparison."""
     m = re.search(r'(\d+(?:\.\d+)*)', v)
@@ -1290,10 +1330,11 @@ def check_hermes_updates() -> dict[str, Any]:
 
 
 def _get_npm_outdated() -> tuple[int, dict[str, Any], str]:
-    """Helper: run npm outdated -g --json once."""
+    """Helper: run npm outdated -g --json once. Uses nvm env for cron PATH."""
     rc, stdout, stderr = run_cmd(
         ["npm", "outdated", "-g", "--json"],
         timeout=CMD_TIMEOUT,
+        env=_nvm_env(),
     )
     try:
         data = json.loads(stdout) if stdout else {}
@@ -1318,6 +1359,7 @@ def check_npm_audit() -> dict[str, Any]:
     rc, stdout, stderr = run_cmd(
         ["npm", "audit", "-g", "--json"],
         timeout=CMD_TIMEOUT * 2,
+        env=_nvm_env(),
     )
     try:
         data = json.loads(stdout) if stdout else {}
@@ -1535,7 +1577,7 @@ def check_gitnexus() -> dict[str, Any]:
     gitnexus_bin = _which("gitnexus")
     if not gitnexus_bin:
         return {"ok": False, "exit_code": -2, "repo_count": 0, "error": "gitnexus not found in PATH"}
-    rc, stdout, stderr = run_cmd([gitnexus_bin, "list"], timeout=CMD_TIMEOUT)
+    rc, stdout, stderr = run_cmd([gitnexus_bin, "list"], timeout=CMD_TIMEOUT, env=_nvm_env())
     ok = rc == 0
     repo_count = 0
     if ok and stdout:
@@ -1552,7 +1594,7 @@ def check_gitnexus_version() -> dict[str, Any]:
     rc_inst, installed_v, _ = run_cmd([gitnexus_bin, "--version"], timeout=CMD_TIMEOUT)
     installed = installed_v.strip() if rc_inst == 0 else None
 
-    rc_npm, latest_v, _ = run_cmd(["npm", "view", "gitnexus", "version"], timeout=CMD_TIMEOUT)
+    rc_npm, latest_v, _ = run_cmd(["npm", "view", "gitnexus", "version"], timeout=CMD_TIMEOUT, env=_nvm_env())
     latest = latest_v.strip() if rc_npm == 0 else None
 
     update_available = False
@@ -1606,10 +1648,11 @@ def check_context7() -> dict[str, Any]:
                 pass
     using_npm_wrapper = npm_wrapper_count > 0
 
-    # 3. Installed version (global)
+    # 3. Installed version (global) — use nvm env so npm is found in cron PATH
     rc3, installed_out, _ = run_cmd(
         ["npm", "list", "-g", "@upstash/context7-mcp", "--depth=0"],
         timeout=CMD_TIMEOUT,
+        env=_nvm_env(),
     )
     installed_version = None
     if rc3 == 0 and installed_out:
@@ -1617,10 +1660,11 @@ def check_context7() -> dict[str, Any]:
         if m:
             installed_version = m.group(1)
 
-    # 4. Latest version from npm registry
+    # 4. Latest version from npm registry — use nvm env
     rc4, latest_v, _ = run_cmd(
         ["npm", "view", "@upstash/context7-mcp", "version"],
         timeout=CMD_TIMEOUT,
+        env=_nvm_env(),
     )
     latest_version = latest_v.strip() if rc4 == 0 else None
 
