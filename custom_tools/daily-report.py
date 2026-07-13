@@ -63,29 +63,6 @@ KNOWN_MITIGATIONS: dict[str, dict[str, Any]] = {}
 # Helpers
 # ═══════════════════════════════════════════
 
-def _which(cmd: str) -> str | None:
-    """Resolve command in PATH via shutil.which. Returns path or None."""
-    return shutil.which(cmd)
-
-
-def run_cmd(cmd, timeout=CMD_TIMEOUT, cwd=None, shell=False, env=None, input_text=None):
-    """Run a command, return (exit_code, stdout, stderr). Handles timeouts and missing executables."""
-    try:
-        if shell:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             shell=True, cwd=cwd, env=env, input=input_text)
-        else:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             cwd=cwd, env=env, input=input_text)
-        return p.returncode, p.stdout.strip() if p.stdout else "", p.stderr.strip() if p.stderr else ""
-    except subprocess.TimeoutExpired:
-        return -1, "", f"timeout after {timeout}s"
-    except FileNotFoundError as e:
-        return -2, "", str(e)
-    except Exception as e:
-        return -3, "", str(e)
-
-
 def _resolve_nvm_bin() -> str | None:
     """Resolve the nvm bin directory for the current default Node version.
 
@@ -111,6 +88,41 @@ def _resolve_nvm_bin() -> str | None:
     pattern = os.path.join(nvm_dir, "versions", "node", "*", "bin")
     matches = sorted(glob.glob(pattern), reverse=True)
     return matches[0] if matches else None
+
+
+def _which(cmd: str) -> str | None:
+    """Resolve command in PATH, with nvm bin fallback for cron env.
+
+    shutil.which works in normal shells. In cron, PATH lacks nvm bin,
+    so we fall back to _resolve_nvm_bin() for Node.js CLI tools.
+    """
+    result = shutil.which(cmd)
+    if result:
+        return result
+    nvm_bin = _resolve_nvm_bin()
+    if nvm_bin:
+        candidate = os.path.join(nvm_bin, cmd)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def run_cmd(cmd, timeout=CMD_TIMEOUT, cwd=None, shell=False, env=None, input_text=None):
+    """Run a command, return (exit_code, stdout, stderr). Handles timeouts and missing executables."""
+    try:
+        if shell:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                             shell=True, cwd=cwd, env=env, input=input_text)
+        else:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                             cwd=cwd, env=env, input=input_text)
+        return p.returncode, p.stdout.strip() if p.stdout else "", p.stderr.strip() if p.stderr else ""
+    except subprocess.TimeoutExpired:
+        return -1, "", f"timeout after {timeout}s"
+    except FileNotFoundError as e:
+        return -2, "", str(e)
+    except Exception as e:
+        return -3, "", str(e)
 
 
 def _nvm_env() -> dict[str, str] | None:

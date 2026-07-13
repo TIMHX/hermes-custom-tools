@@ -333,10 +333,12 @@ def check_beryl_ax() -> dict[str, Any]:
     except (ValueError, IndexError):
         pass
 
-    # Service count deviation from baseline
+    # Service count deviation from baseline.
+    # Update BERYL_EXPECTED_SERVICE_COUNT when a new service is intentionally added/removed.
+    BERYL_EXPECTED_SERVICE_COUNT = 52  # 2026-07-03: 51, 2026-07-12: +etherwake → 52
     svc_count = result.get("enabled_service_count")
-    if svc_count is not None and svc_count != 51:
-        perf_warnings.append(f"service_count {svc_count} (baseline 51)")
+    if svc_count is not None and svc_count != BERYL_EXPECTED_SERVICE_COUNT:
+        perf_warnings.append(f"service_count {svc_count} (baseline {BERYL_EXPECTED_SERVICE_COUNT})")
 
     result["performance"] = {
         "memory_pct": mem_pct,
