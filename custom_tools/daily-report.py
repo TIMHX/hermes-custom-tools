@@ -1603,7 +1603,7 @@ def check_gitnexus_version() -> dict[str, Any]:
     gitnexus_bin = _which("gitnexus")
     if not gitnexus_bin:
         return {"installed_version": None, "latest_version": None, "update_available": False, "upgrade_command": None, "error": "gitnexus not found in PATH"}
-    rc_inst, installed_v, _ = run_cmd([gitnexus_bin, "--version"], timeout=CMD_TIMEOUT)
+    rc_inst, installed_v, _ = run_cmd([gitnexus_bin, "--version"], timeout=CMD_TIMEOUT, env=_nvm_env())
     installed = installed_v.strip() if rc_inst == 0 else None
 
     rc_npm, latest_v, _ = run_cmd(["npm", "view", "gitnexus", "version"], timeout=CMD_TIMEOUT, env=_nvm_env())
