@@ -1917,6 +1917,16 @@ def check_tailscale_api_token() -> dict[str, Any]:
         return {"error": str(e)}
 
 
+def check_microbin() -> dict[str, Any]:
+    """Check MicroBin pastebin service health."""
+    try:
+        r = urllib.request.urlopen("http://100.82.77.91:8080", timeout=5)
+        ok = r.status == 200
+    except Exception as e:
+        return {"ok": False, "error": str(e), "url": "http://100.82.77.91:8080"}
+    return {"ok": ok, "status": r.status, "url": "http://100.82.77.91:8080"}
+
+
 # ═══════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════
@@ -2043,6 +2053,7 @@ def main() -> None:
     applications["bitwarden_sm"] = _safe_check("bitwarden_sm", check_bitwarden_sm)
     applications["local_bin"] = _safe_check("local_bin", check_local_bin)
     applications["tailscale_api_token"] = _safe_check("tailscale_api_token", check_tailscale_api_token)
+    applications["microbin"] = _safe_check("microbin", check_microbin)
 
     # ═══ Output ═══
     report = {
