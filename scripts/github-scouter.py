@@ -25,6 +25,48 @@ CATEGORY = "Github"
 DAYS_WINDOW = 7
 TOP_N = 15
 
+# ── Secrets: pull from Bitwarden if env vars are empty ──────────
+_NEEDED_SECRETS = [
+    "NOTION_TOKEN",
+    "NOTION_API_KEY",
+    "GITHUB_TOKEN",
+]
+BWS_BIN = os.path.expanduser("~/.hermes/bin/bws")
+
+
+def _fetch_secrets_from_bitwarden() -> None:
+    """If any needed API key is missing from env, fetch all from Bitwarden."""
+    missing = [k for k in _NEEDED_SECRETS if not os.environ.get(k)]
+    if not missing:
+        return  # all keys already present
+
+    token = os.environ.get("BWS_ACCESS_TOKEN", "")
+    if not token:
+        print("  [WARN] BWS_ACCESS_TOKEN not set, skipping Bitwarden fetch", file=sys.stderr)
+        return
+
+    try:
+        result = subprocess.run(
+            [BWS_BIN, "secret", "list", "-t", token],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] bws failed (rc={result.returncode}): {result.stderr[:200]}", file=sys.stderr)
+            return
+
+        secrets = json.loads(result.stdout)
+        injected = 0
+        for s in secrets:
+            key = s.get("key", "")
+            if key in missing:
+                os.environ[key] = s["value"]
+                injected += 1
+
+        if injected:
+            print(f"  [bws] Injected {injected}/{len(missing)} missing secrets from Bitwarden", file=sys.stderr)
+    except Exception as e:
+        print(f"  [WARN] bws error: {e}", file=sys.stderr)
+
 
 def _get_notion_token() -> str:
     global NOTION_TOKEN
@@ -163,6 +205,7 @@ def fetch_github_trending() -> list:
 # ── Main ──
 
 def main():
+    _fetch_secrets_from_bitwarden()
     notion_token = _get_notion_token()
     if not notion_token:
         print("[FATAL] NOTION_TOKEN or NOTION_API_KEY not set", file=sys.stderr)
