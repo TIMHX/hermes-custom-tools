@@ -11,7 +11,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def himalaya_json(args):
     """Run himalaya and parse JSON, stripping WARN lines."""
     result = subprocess.run(
-        [HIMALAYA] + args + ['--output', 'json'],
+        [HIMALAYA] + args + ['--json'],
         capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
@@ -31,7 +31,11 @@ def himalaya_json(args):
     if idx2 == -1:
         return None
     try:
-        return json.loads(json_str)
+        data = json.loads(json_str)
+        # v2 wraps envelope list in {"envelopes": [...]}
+        if isinstance(data, dict) and 'envelopes' in data:
+            return data['envelopes']
+        return data
     except:
         return None
 
@@ -71,7 +75,7 @@ def main():
         
         # Mark as read
         subprocess.run(
-            [HIMALAYA, 'flag', 'add', str(mid), '--flag', 'seen'],
+            [HIMALAYA, 'flag', 'add', '--flag', 'seen', str(mid)],
             capture_output=True, timeout=10
         )
     

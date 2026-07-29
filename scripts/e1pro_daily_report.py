@@ -31,7 +31,7 @@ def cleanup_old_images(days=7):
 
 def himalaya_json(args):
     result = subprocess.run(
-        [HIMALAYA] + args + ['--output', 'json'],
+        [HIMALAYA] + args + ['--json'],
         capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
@@ -44,17 +44,21 @@ def himalaya_json(args):
     if idx2 == -1:
         return None
     try:
-        return json.loads(out[idx:idx2+1])
+        data = json.loads(out[idx:idx2+1])
+        # v2 wraps envelope list in {"envelopes": [...]}
+        if isinstance(data, dict) and 'envelopes' in data:
+            return data['envelopes']
+        return data
     except:
         return None
 
 def export_images(msg_id):
-    """Export message via himalaya and extract inline images + attachments.
+    """Download all attachments and extract inline images from the email.
     Returns list of absolute file paths saved to OUTPUT_DIR."""
     try:
         tmpdir = tempfile.mkdtemp(prefix='e1pro_')
         r = subprocess.run(
-            [HIMALAYA, 'message', 'export', str(msg_id), '-d', tmpdir],
+            [HIMALAYA, 'attachment', 'download', str(msg_id), '--dir', tmpdir],
             capture_output=True, text=True, timeout=30
         )
         if r.returncode != 0:
