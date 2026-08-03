@@ -4,53 +4,12 @@ Queries NWS API. Outputs alert on severe weather; silent otherwise.
 Location is read from NWS_HOME_LAT/LON env vars or ~/.hermes/config/nws_profiles.json.
 Designed for hermes-agent no_agent cron mode."""
 
-import json
 import os
 import sys
-import time
-import urllib.request
-import urllib.error
 
-# ── Location (3-level fallback: env vars → NWS_PROFILE → default profile) ──
-_CONFIG_PATH = os.path.expanduser("~/.hermes/config/nws_profiles.json")
-_LOCATION_NAME = "Unknown"
+from nws_utils import load_coords, nws_get, get_grid_point
 
-
-def _load_coords() -> tuple[float, float]:
-    """Return (lat, lon), also sets global _LOCATION_NAME."""
-    global _LOCATION_NAME
-
-    # Level 1: Direct env var override
-    lat_s = os.getenv("NWS_HOME_LAT")
-    lon_s = os.getenv("NWS_HOME_LON")
-    if lat_s and lon_s:
-        _LOCATION_NAME = os.getenv("NWS_LOCATION_NAME", "Configured Location")
-        return float(lat_s), float(lon_s)
-
-    # Level 2-3: Profile config
-    try:
-        with open(_CONFIG_PATH) as f:
-            config = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        print(
-            f"[FATAL] NWS_HOME_LAT/LON not set and {_CONFIG_PATH} not found.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    profile_name = os.getenv("NWS_PROFILE", config.get("default", "trenton"))
-    profiles = config.get("profiles", {})
-    p = profiles.get(profile_name)
-    if not p:
-        available = ", ".join(profiles.keys())
-        print(f"[FATAL] Profile '{profile_name}' not found. Available: {available}", file=sys.stderr)
-        sys.exit(1)
-
-    _LOCATION_NAME = p.get("name", profile_name)
-    return p["lat"], p["lon"]
-
-
-LAT, LON = _load_coords()
+_LOCATION_NAME, LAT, LON = load_coords()
 USER_AGENT = "hermes-weather-watchdog/1.0"
 TIMEOUT = 15
 MAX_RETRIES = 2
@@ -64,32 +23,6 @@ SEVERE_KEYWORDS = [
     "wind chill", "heat advisory", "severe",
 ]
 ALERT_SEVERITIES = ["Extreme", "Severe", "Moderate"]
-
-# ── helpers ──
-
-def nws_get(url: str) -> dict:
-    """GET from NWS API with retry and User-Agent."""
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "application/geo+json",
-    })
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            if e.code == 503:
-                time.sleep(2 ** attempt)
-                continue
-            print(f"[ERROR] NWS HTTP {e.code} for {url}", file=sys.stderr)
-            return {}
-        except Exception as e:
-            if attempt < MAX_RETRIES:
-                time.sleep(2)
-                continue
-            print(f"[ERROR] NWS fetch failed: {e}", file=sys.stderr)
-            return {}
-    return {}
 
 
 def check_alerts() -> list[str]:
@@ -112,14 +45,9 @@ def check_alerts() -> list[str]:
 
 def check_forecast() -> str | None:
     """Return formatted forecast alert if bad weather detected, else None."""
-    # Get grid endpoint
-    points_url = f"https://api.weather.gov/points/{LAT},{LON}"
-    points = nws_get(points_url)
-    if not points or "properties" not in points:
-        print("[ERROR] Failed to get gridpoint", file=sys.stderr)
-        return None
+    grid = get_grid_point(LAT, LON, user_agent=USER_AGENT)
 
-    forecast_url = points["properties"].get("forecast")
+    forecast_url = f"https://api.weather.gov/gridpoints/{grid['office']}/{grid['grid_x']},{grid['grid_y']}/forecast"
     if not forecast_url:
         print("[ERROR] No forecast URL in gridpoint response", file=sys.stderr)
         return None

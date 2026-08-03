@@ -55,6 +55,7 @@ def himalaya_json(args):
 def export_images(msg_id):
     """Download all attachments and extract inline images from the email.
     Returns list of absolute file paths saved to OUTPUT_DIR."""
+    tmpdir = None
     try:
         tmpdir = tempfile.mkdtemp(prefix='e1pro_')
         r = subprocess.run(
@@ -74,7 +75,7 @@ def export_images(msg_id):
                 images.append(dst)
         return images
     finally:
-        if 'tmpdir' in dir():
+        if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 def main():

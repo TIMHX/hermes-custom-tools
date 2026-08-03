@@ -47,8 +47,10 @@ def _fetch_secrets_from_bitwarden() -> None:
 
     try:
         result = subprocess.run(
-            [BWS_BIN, "secret", "list", "-t", token],
-            capture_output=True, text=True, timeout=15,
+            [BWS_BIN, "secret", "list"],
+            capture_output=True, text=True,
+            env={**os.environ, "BWS_ACCESS_TOKEN": token},
+            timeout=15,
         )
         if result.returncode != 0:
             print(f"  [WARN] bws failed (rc={result.returncode}): {result.stderr[:200]}", file=sys.stderr)
