@@ -1,0 +1,7 @@
+#!/bin/bash
+# context7-mcp MCP server — resolves node + module path via nvm default
+# Usage: nvm-context7 [context7-mcp args...]
+set -e
+NVM_VERSION=$(cat "$HOME/.nvm/alias/default" 2>/dev/null)
+NVM_DIR="$HOME/.nvm/versions/node/$NVM_VERSION"
+exec "$NVM_DIR/bin/node"   "$NVM_DIR/lib/node_modules/@upstash/context7-mcp/dist/index.js" "$@"

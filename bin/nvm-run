@@ -1,0 +1,8 @@
+#!/bin/bash
+# Resolve <cmd> from current nvm bin/ and run with correct PATH
+# Usage: nvm-run <cmd> [args...]
+set -e
+NVM_VERSION=$(cat "$HOME/.nvm/alias/default" 2>/dev/null)
+NVM_BIN="$HOME/.nvm/versions/node/$NVM_VERSION/bin"
+export PATH="$NVM_BIN:$PATH"
+exec "$NVM_BIN/$1" "${@:2}"
