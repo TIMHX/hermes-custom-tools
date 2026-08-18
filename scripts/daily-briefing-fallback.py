@@ -94,7 +94,7 @@ def minimax_prepare(system_msg, user_msg):
         messages.append({"role": "system", "content": system_msg})
     messages.append({"role": "user", "content": user_msg})
     body = json.dumps({
-        "model": "MiniMax-M2.7",
+        "model": "MiniMax-M3",
         "max_tokens": 8192,
         "temperature": 0.3,
         "messages": messages,
