@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from check_beryl import _resolve_beryl_ip, _ssh_beryl, check_beryl_ax
+from check_exit_cn import check_exit_node_cn
 
 # ═══════════════════════════════════════════
 # Configuration
@@ -53,6 +54,8 @@ BERYL_IP_FALLBACK = "100.92.132.104"
 BERYL_PORT = 1080
 WIN_HOST = "tim-pc"
 SSH_TIMEOUT_OPTS = "-o ConnectTimeout=5 -o BatchMode=yes"
+# 阿里云深圳 exit node 的检查已抽到 check_exit_cn.py（见文件头 import），
+# 与 check_beryl.py 同构。详见 engineering-wiki/troubleshooting/exit-node-cn-handoff-20260903.md。
 
 # KNOWN_MITIGATIONS: temporary workarounds for CVEs awaiting upstream kernel fixes.
 # Add entries when a CVE needs mitigation (modprobe.d blacklist).
@@ -2009,6 +2012,8 @@ def main() -> None:
     # DERP + VPN
     infrastructure["derp_chain"] = _safe_check("derp_chain", check_derp_chain)
     infrastructure["exit_node"] = _safe_check("exit_node", check_exit_node, ts_status)
+    # 只读检查；绝不在日报路径里调用 tailscale set/up。见函数 docstring。
+    infrastructure["aliyun_sz_exit"] = _safe_check("aliyun_sz_exit", check_exit_node_cn)
 
     # VPN summary (depends on earlier checks)
     derp_ok = infrastructure.get("derp_chain", {}).get("derp_reachable", False)
