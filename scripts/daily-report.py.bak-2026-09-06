@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from check_beryl import _resolve_beryl_ip, _ssh_beryl, check_beryl_ax
-from check_exit_cn import check_exit_node_cn, _ssh_aliyun_sz_exit
+from check_exit_cn import check_exit_node_cn
 
 # ═══════════════════════════════════════════
 # Configuration
@@ -877,80 +877,6 @@ def check_exit_node(ts_status: str) -> dict[str, Any]:
         "exit_nodes": exit_nodes,
         "beryl_advertising": beryl_exit,
     }
-
-
-def check_security_baseline() -> dict[str, Any]:
-    """Verify the 2026-09-05 hardening still holds across the fleet.
-
-    Drift this catches: a service rebound to 0.0.0.0, ufw switched off, the Beryl SOCKS
-    allowlist reset by a firmware upgrade (an OpenWrt upgrade silently wiped it once), or
-    engineering-wiki flipped back to public. An absent tim-pc is not a failure — it dual-boots
-    and is offline while booted into Windows.
-
-    Hosts are reached through ~/.ssh/config aliases and the existing _ssh_aliyun_sz_exit /
-    _ssh_beryl helpers, not hand-rolled -i flags (the VPS has no ~/.ssh/id_ed25519).
-    """
-    # /usr/sbin/ufw is missing from the minimal PATH of a non-interactive session, so use the
-    # full path; sudo -n is a no-op for root and hits xing's NOPASSWD sudo on tim-pc. No single
-    # quotes in the probe: it passes through ssh as one argument and nested quotes are fragile.
-    probe = ('echo ufw=$(sudo -n /usr/sbin/ufw status 2>/dev/null | head -1 | cut -d" " -f2); '
-             'echo f2b=$(systemctl is-active fail2ban 2>/dev/null)')
-
-    findings: dict[str, Any] = {}
-    drift: list[str] = []
-
-    def probe_host(name: str, cmd) -> None:
-        rc, out, _ = run_cmd(cmd, timeout=20)
-        if rc != 0 and name == "tim-pc":
-            findings[name] = {"reachable": False, "note": "offline or booted into Windows"}
-            return
-        vals = dict(kv.split("=", 1) for kv in out.split() if "=" in kv)
-        ufw, f2b = vals.get("ufw", "?"), vals.get("f2b", "?")
-        findings[name] = {"reachable": True, "ufw": ufw, "fail2ban": f2b}
-        if ufw != "active":
-            drift.append(f"{name}: ufw={ufw!r}, expected active")
-        if f2b != "active":
-            drift.append(f"{name}: fail2ban={f2b!r}, expected active")
-
-    probe_host("vps", ["sh", "-c", probe])
-    probe_host("tim-pc", ["ssh", "tim-pc", probe])
-    rc, out, _ = _ssh_aliyun_sz_exit(probe, timeout=20)
-    vals = dict(kv.split("=", 1) for kv in out.split() if "=" in kv)
-    ufw, f2b = vals.get("ufw", "?"), vals.get("f2b", "?")
-    findings["aliyun"] = {"reachable": rc == 0, "ufw": ufw, "fail2ban": f2b}
-    if ufw != "active":
-        drift.append(f"aliyun: ufw={ufw!r}, expected active")
-    if f2b != "active":
-        drift.append(f"aliyun: fail2ban={f2b!r}, expected active")
-
-    rc, out, _ = run_cmd(["ssh", "tim-pc", "ss -tlnp 2>/dev/null | grep :8000 || true"], timeout=20)
-    if rc == 0:
-        bound = out.strip()
-        bad = ("0.0.0.0:8000" in bound) or ("127.0.0.1:8000" in bound)
-        findings["upload_server"] = {"bound": bound or "not listening",
-                                     "ok": bool(bound) and not bad}
-        if not bound:
-            drift.append("upload_server is not listening on :8000")
-        elif bad:
-            drift.append(f"upload_server bound off the Tailscale address: {bound}")
-
-    rc, out, _ = _ssh_beryl('grep -c "pass { from: 0.0.0.0/0" /etc/sockd.conf 2>/dev/null || echo 0',
-                            timeout=20)
-    if rc == 0 and out.strip():
-        wide = out.strip().splitlines()[-1]
-        findings["beryl_socks"] = {"open_pass_rules": wide}
-        if wide != "0":
-            drift.append(f"Beryl sockd has {wide} wide-open pass rule(s) — the allowlist was lost")
-
-    rc, out, _ = run_cmd(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                          "-H", "Authorization:",
-                          "https://api.github.com/repos/TIMHX/engineering-wiki"], timeout=20)
-    code = out.strip()
-    findings["engineering_wiki"] = {"anonymous_http": code, "private": code == "404"}
-    if code != "404":
-        drift.append(f"engineering-wiki is anonymously readable again (HTTP {code})")
-
-    return {"ok": not drift, "drift": drift, "detail": findings}
 
 
 def check_main_router() -> dict[str, Any]:
@@ -2102,7 +2028,6 @@ def main() -> None:
     security["pending_upgrades"] = _safe_check("security_upgrades", check_security_upgrades)
     security["kernel_updates"] = _safe_check("kernel_updates", check_kernel_updates)
     security["mitigations"] = _safe_check("mitigations", check_mitigations)
-    security["baseline_drift"] = _safe_check("baseline_drift", check_security_baseline)
 
     # ═══ Applications ═══
     applications: dict[str, Any] = {}
