@@ -2010,6 +2010,170 @@ def check_microbin() -> dict[str, Any]:
 # Main
 # ═══════════════════════════════════════════
 
+
+# ═══════════════════════════════════════════
+# OpenViking 模型供应商欠费/断连检查
+# ═══════════════════════════════════════════
+
+OV_CONF = "/home/xing/.openviking/ov.conf"
+PROVIDER_TIMEOUT = 10
+
+
+def _provider_post(url: str, key: str, payload: dict) -> tuple[int | None, str, int, str | None]:
+    """POST a minimal probe. Returns (http_status, body, latency_ms, neterr).
+
+    Never returns the key; callers must not put `key` into the result dict.
+    """
+    import urllib.error
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        method="POST",
+    )
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=PROVIDER_TIMEOUT) as r:
+            return r.status, r.read(4096).decode("utf-8", "replace"), int((time.monotonic() - t0) * 1000), None
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(4096).decode("utf-8", "replace"), int((time.monotonic() - t0) * 1000), None
+    except Exception as e:
+        return None, "", int((time.monotonic() - t0) * 1000), f"{type(e).__name__}: {e}"
+
+
+def _classify_http(status: int | None, neterr: str | None) -> str | None:
+    """Transport/HTTP-level verdict. None = look at the body instead."""
+    if neterr:
+        return "down"          # DNS/TCP/TLS/timeout — 断连
+    if status == 402:
+        return "arrears"       # 欠费
+    if status in (401, 403):
+        return "auth"          # key 失效/被吊销
+    if status == 429:
+        return "quota"         # 限流或额度耗尽
+    if status != 200:
+        return "error"
+    return None
+
+
+def check_openviking_providers() -> dict[str, Any]:
+    """Probe the three model providers OpenViking actually depends on.
+
+    Reads the live keys from ov.conf rather than from bws, so this verifies the
+    credential OpenViking is really using — a key rotated in bws but not yet in
+    ov.conf must show as broken, not as healthy.
+
+    Cost per run: jina 3 tokens, minimax ~165 tokens, gte-rerank 6 tokens.
+    """
+    try:
+        cfg = json.load(open(OV_CONF, encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": f"cannot read {OV_CONF}: {type(e).__name__}: {e}"}
+
+    out: dict[str, Any] = {}
+
+    # ── jina: embedding（挂了 = 无法写入/检索记忆）──────────────
+    try:
+        d = cfg["embedding"]["dense"]
+        st, body, ms, neterr = _provider_post(
+            d["api_base"].rstrip("/") + "/embeddings", d["api_key"],
+            {"model": d["model"], "input": ["ping"], "dimensions": d.get("dimension")},
+        )
+        state = _classify_http(st, neterr)
+        if state is None:
+            # Jina 用标准 HTTP 码报错，200 就看有没有真的拿到向量。
+            # 不能 json.loads(body)：1024 维向量约 12KB，会被 read(4096) 截断成
+            # 非法 JSON，导致健康的 Jina 被误报为 error。查标记串即可。
+            state = "ok" if '"embedding":[' in body else "error"
+        out["jina"] = {
+            "role": "embedding", "model": d.get("model"), "state": state,
+            "ok": state == "ok", "http_status": st, "latency_ms": ms,
+            "error": neterr or (body[:300] if state != "ok" else None),
+        }
+    except Exception as e:
+        out["jina"] = {"role": "embedding", "state": "error", "ok": False,
+                       "error": f"{type(e).__name__}: {e}"}
+
+    # ── minimax: VLM + query_planner ────────────────────────────
+    # 注意：MiniMax 欠费/鉴权失败时仍然返回 HTTP 200，真实状态码在
+    # base_resp.status_code 里。只看 HTTP 码会把欠费误报成健康。
+    MM_CODES = {0: "ok", 1004: "auth", 1008: "arrears", 1002: "quota",
+                1039: "quota", 1027: "ok"}  # 1027=内容过滤，说明链路是通的
+    try:
+        v = cfg["vlm"]
+        st, body, ms, neterr = _provider_post(
+            v["api_base"].rstrip("/") + "/chat/completions", v["api_key"],
+            {"model": v["model"], "max_tokens": 1,
+             "messages": [{"role": "user", "content": "ping"}],
+             **v.get("extra_request_body", {})},
+        )
+        state = _classify_http(st, neterr)
+        mm_code = mm_msg = None
+        if state is None:
+            try:
+                br = json.loads(body).get("base_resp") or {}
+                mm_code, mm_msg = br.get("status_code"), br.get("status_msg")
+                state = MM_CODES.get(mm_code, "error")
+            except Exception:
+                state = "error"
+        out["minimax"] = {
+            "role": "vlm + query_planner", "model": v.get("model"), "state": state,
+            "ok": state == "ok", "http_status": st, "latency_ms": ms,
+            "base_resp_code": mm_code, "base_resp_msg": mm_msg,
+            "error": neterr or (body[:300] if state != "ok" else None),
+        }
+    except Exception as e:
+        out["minimax"] = {"role": "vlm + query_planner", "state": "error", "ok": False,
+                          "error": f"{type(e).__name__}: {e}"}
+
+    # ── gte-rerank (百炼/DashScope): rerank ─────────────────────
+    # 百炼错误走 body 里的 code 字符串（Arrearage / InvalidApiKey / Throttling.*）
+    try:
+        r = cfg["rerank"]
+        st, body, ms, neterr = _provider_post(
+            r["api_base"], r["api_key"],
+            {"model": r["model"], "input": {"query": "ping", "documents": ["ping"]},
+             "parameters": {"top_n": 1}},
+        )
+        state = _classify_http(st, neterr)
+        code = None
+        if state is None:
+            try:
+                data = json.loads(body)
+                code = data.get("code")
+                if not code and data.get("output", {}).get("results"):
+                    state = "ok"
+                elif code:
+                    c = str(code).lower()
+                    state = ("arrears" if "arrear" in c or "balance" in c else
+                             "auth" if "apikey" in c or "auth" in c or "forbidden" in c else
+                             "quota" if "throttl" in c or "quota" in c or "limit" in c else
+                             "error")
+                else:
+                    state = "error"
+            except Exception:
+                state = "error"
+        out["gte_rerank"] = {
+            "role": "rerank", "model": r.get("model"), "state": state,
+            "ok": state == "ok", "http_status": st, "latency_ms": ms,
+            "api_code": code, "error": neterr or (body[:300] if state != "ok" else None),
+        }
+    except Exception as e:
+        out["gte_rerank"] = {"role": "rerank", "state": "error", "ok": False,
+                             "error": f"{type(e).__name__}: {e}"}
+
+    broken = {k: v.get("state") for k, v in out.items() if not v.get("ok")}
+    return {
+        "ok": not broken,
+        "providers": out,
+        "broken": broken,
+        "impact": {
+            "jina": "embedding 挂 → 记忆无法写入/向量检索降级",
+            "minimax": "VLM 挂 → recall 意图规划与摘要失效",
+            "gte_rerank": "rerank 挂 → 召回质量下降，但检索仍可用（非致命）",
+        } if broken else None,
+    }
+
+
 def main() -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -2110,6 +2274,7 @@ def main() -> None:
         "health": _safe_check("openviking_health", check_openviking_health),
         "logs": _safe_check("openviking_logs", check_openviking_logs),
         "version": _safe_check("openviking_version", check_openviking_version),
+        "providers": _safe_check("openviking_providers", check_openviking_providers),
     }
     applications["hermes"] = {
         "version": _safe_check("hermes_version", check_hermes_version),
