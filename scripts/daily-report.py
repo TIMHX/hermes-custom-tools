@@ -2125,7 +2125,7 @@ def check_openviking_providers() -> dict[str, Any]:
         out["minimax"] = {"role": "vlm + query_planner", "state": "error", "ok": False,
                           "error": f"{type(e).__name__}: {e}"}
 
-    # ── gte-rerank (百炼/DashScope): rerank ─────────────────────
+    # ── rerank (百炼/DashScope)：模型名从 ov.conf 读，换模型无需改这里 ──
     # 百炼错误走 body 里的 code 字符串（Arrearage / InvalidApiKey / Throttling.*）
     try:
         r = cfg["rerank"]
@@ -2152,13 +2152,13 @@ def check_openviking_providers() -> dict[str, Any]:
                     state = "error"
             except Exception:
                 state = "error"
-        out["gte_rerank"] = {
+        out["rerank"] = {
             "role": "rerank", "model": r.get("model"), "state": state,
             "ok": state == "ok", "http_status": st, "latency_ms": ms,
             "api_code": code, "error": neterr or (body[:300] if state != "ok" else None),
         }
     except Exception as e:
-        out["gte_rerank"] = {"role": "rerank", "state": "error", "ok": False,
+        out["rerank"] = {"role": "rerank", "state": "error", "ok": False,
                              "error": f"{type(e).__name__}: {e}"}
 
     broken = {k: v.get("state") for k, v in out.items() if not v.get("ok")}
@@ -2169,7 +2169,7 @@ def check_openviking_providers() -> dict[str, Any]:
         "impact": {
             "jina": "embedding 挂 → 记忆无法写入/向量检索降级",
             "minimax": "VLM 挂 → recall 意图规划与摘要失效",
-            "gte_rerank": "rerank 挂 → 召回质量下降，但检索仍可用（非致命）",
+            "rerank": "rerank 挂 → 召回质量下降，但检索仍可用（非致命）",
         } if broken else None,
     }
 
