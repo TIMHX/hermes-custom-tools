@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 BWS_BIN = os.path.expanduser('~/.hermes/bin/bws')
 SECRET_ID = "97c8d776-63de-4afb-873d-b47b0167fcae"
-CREATION_DATE = datetime(2026, 7, 2, tzinfo=timezone.utc)
+CREATION_DATE = datetime(2026, 9, 24, tzinfo=timezone.utc)  # 兜底值；正常从 API 读取真实 expires
 EXPIRY_DAYS = 90
 WARN_DAYS = [7, 3, 1]  # 到期前多少天开始警告
 
@@ -33,6 +33,23 @@ def get_ts_api_key(bws_token):
     data = json.loads(result.stdout)
     return data.get('value')
 
+def get_key_expiry():
+    """用 key 自身查询 /keys/{keyId}，返回真实过期时间（失败返回 None）"""
+    try:
+        bws_token = get_bws_token()
+        api_key = get_ts_api_key(bws_token) if bws_token else None
+        if not api_key or not api_key.startswith("tskey-api-"):
+            return None
+        key_id = api_key.split("-")[2]
+        r = subprocess.run(
+            ["curl", "-s", "-m", "10", "-u", f"{api_key}:",
+             f"https://api.tailscale.com/api/v2/tailnet/-/keys/{key_id}"],
+            capture_output=True, text=True, timeout=15)
+        exp = json.loads(r.stdout).get("expires")
+        return datetime.fromisoformat(exp.replace("Z", "+00:00")) if exp else None
+    except Exception:
+        return None
+
 def check_expiry():
     """检查 token 过期状态"""
     now = datetime.now(timezone.utc)
@@ -45,6 +62,11 @@ def check_expiry():
     # 添加 89 天
     from datetime import timedelta
     expires_at = CREATION_DATE + timedelta(days=EXPIRY_DAYS - 1)
+    source = "fallback"
+    # 优先从 Tailscale API 读 key 自身的 expires，轮换后无需改脚本
+    real = get_key_expiry()
+    if real:
+        expires_at, source = real, "api"
     
     days_left = (expires_at - now).days
     is_warning = days_left in WARN_DAYS
@@ -61,6 +83,7 @@ def check_expiry():
         "expired": is_expired,
         "status": "EXPIRED" if is_expired else ("WARNING" if is_warning else "OK"),
         "secret_id": SECRET_ID,
+        "expiry_source": source,
     }
 
 def test_api_key():
