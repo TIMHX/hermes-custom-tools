@@ -6,8 +6,8 @@
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 export PATH="$PATH:/home/linuxbrew/.linuxbrew/lib/node_modules/@googleworkspace/cli/bin"
 
-# Use hermes-agent's venv Python (has google-api-python-client installed)
-export PYTHON="${HERMES_HOME}/hermes-agent/venv/bin/python3"
+# Dedicated Google env (uv, ~/.hermes/venvs/google), independent of Hermes upgrades
+export PYTHON="${HERMES_HOME}/venvs/google/bin/python"
 
 # Skill paths
 export GWORKSPACE_SKILL_DIR="${HERMES_HOME}/skills/productivity/google-workspace"

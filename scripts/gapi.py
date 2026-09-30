@@ -20,8 +20,8 @@ GBRIDGE_SCRIPT = SKILL_DIR / "scripts/gws_bridge.py"
 GWS_CLI_BIN = "/home/linuxbrew/.linuxbrew/lib/node_modules/@googleworkspace/cli/bin"
 os.environ["PATH"] = os.environ.get("PATH", "") + ":" + GWS_CLI_BIN
 
-# Use hermes-agent's venv Python (has google-api-python-client)
-VENV_PYTHON = HERMES_HOME / "hermes-agent/venv/bin/python3"
+# Dedicated Google env (uv, ~/.hermes/venvs/google), independent of Hermes upgrades
+VENV_PYTHON = HERMES_HOME / "venvs/google/bin/python"
 if VENV_PYTHON.exists():
     PYTHON = str(VENV_PYTHON)
 else:
